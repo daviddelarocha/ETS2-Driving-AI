@@ -88,11 +88,6 @@ https://github.com/Funbit/ets2-telemetry-server
 
 ## ⚙️ Usage
 
-### 🧪 Test dataset capture
-```bash
-python .\collect_dataset.py --test
-```
-
 ### 📊 Collect dataset
 ```bash
 python .\collect_dataset.py
