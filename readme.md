@@ -1,4 +1,4 @@
-# 🚛 ETS2-Autopilot
+# 🚛 ETS2-Driving-AI
 
 Deep Learning multimodal autopilot for Euro Truck Simulator 2.
 
