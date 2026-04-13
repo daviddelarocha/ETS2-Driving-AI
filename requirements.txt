@@ -1,0 +1,13 @@
+mss
+pillow
+pandas
+keyboard
+requests
+opencv-python
+pygame
+torch
+torchvision
+scikit-learn
+matplotlib
+pydirectinput
+vgamepad
