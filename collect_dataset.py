@@ -13,7 +13,6 @@ import numpy as np
 from mss import mss
 from PIL import Image
 
-from controller_adapter import SwitchProControllerAdapter
 from telemetry_adapter import HttpTelemetryAdapter
 
 
@@ -21,7 +20,6 @@ DATASET_DIR = Path("dataset")
 IMAGES_DIR = DATASET_DIR / "images"
 CSV_PATH = DATASET_DIR / "samples.csv"
 META_PATH = DATASET_DIR / "meta.json"
-TRUCK_CONFIG_PATH = Path("truck_config.json")
 
 CAPTURE_FPS = 10.0
 JPEG_QUALITY = 75
@@ -38,13 +36,6 @@ QUIT_KEY = "esc"
 FONT_SCALE = 0.55
 FONT_THICKNESS = 1
 LINE_STEP = 22
-
-
-def load_truck_config(path: Path = TRUCK_CONFIG_PATH) -> Dict[str, float]:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return {
-        "truck_power_hp": float(data["truck_power_hp"]),
-    }
 
 
 def format_duration(seconds: float) -> str:
@@ -103,9 +94,8 @@ class DatasetWriter:
             "throttle",
             "brake",
             "truck_speed_kmh",
+            "truck_accel_kmh_s",
             "speed_limit_kmh",
-            "cargo_mass_kg",
-            "truck_power_hp",
         ]
 
         self.csv_writer = csv.DictWriter(self.csv_file, fieldnames=fieldnames)
@@ -144,13 +134,12 @@ class DatasetWriter:
             "sample_id": sample_id,
             "timestamp": timestamp,
             "image_path": f"images/{image_filename}",
-            "steering": telemetry["game_steer"],
-            "throttle": telemetry["game_throttle"],
-            "brake": telemetry["game_brake"],
+            "steering": telemetry["user_steer"],
+            "throttle": telemetry["user_throttle"],
+            "brake": telemetry["user_brake"],
             "truck_speed_kmh": telemetry["truck_speed_kmh"],
+            "truck_accel_kmh_s": telemetry["truck_accel_kmh_s"],
             "speed_limit_kmh": telemetry["speed_limit_kmh"],
-            "cargo_mass_kg": telemetry["cargo_mass_kg"],
-            "truck_power_hp": telemetry["truck_power_hp"],
         }
 
         self.csv_writer.writerow(row)
@@ -177,18 +166,6 @@ def preprocess_frame(image: Image.Image) -> Image.Image:
 def pil_to_bgr(image: Image.Image) -> np.ndarray:
     rgb = np.array(image)
     return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-
-
-def build_telemetry_frame(raw_telemetry: Dict[str, float], truck_cfg: Dict[str, float]) -> Dict[str, float]:
-    return {
-        "truck_speed_kmh": raw_telemetry["truck_speed_kmh"],
-        "speed_limit_kmh": raw_telemetry["speed_limit_kmh"],
-        "cargo_mass_kg": raw_telemetry["cargo_mass_kg"],
-        "truck_power_hp": truck_cfg["truck_power_hp"],
-        "game_steer": raw_telemetry["game_steer"],
-        "game_throttle": raw_telemetry["game_throttle"],
-        "game_brake": raw_telemetry["game_brake"],
-    }
 
 
 def draw_text_lines(frame_bgr: np.ndarray, lines: list[str]) -> np.ndarray:
@@ -224,17 +201,14 @@ def draw_overlay(
     lines = [
         status_line,
         (
-            f"targets | steer={telemetry['game_steer']:+.3f}  "
-            f"thr={telemetry['game_throttle']:.3f}  "
-            f"brk={telemetry['game_brake']:.3f}"
+            f"user input | steer={telemetry['user_steer']:+.3f}  "
+            f"thr={telemetry['user_throttle']:.3f}  "
+            f"brk={telemetry['user_brake']:.3f}"
         ),
         (
             f"telemetry | speed={telemetry['truck_speed_kmh']:.1f} km/h  "
+            f"accel={telemetry['truck_accel_kmh_s']:+.2f} km/h/s  "
             f"limit={telemetry['speed_limit_kmh']:.1f} km/h"
-        ),
-        (
-            f"truck | power={telemetry['truck_power_hp']:.0f} hp  "
-            f"cargo={telemetry['cargo_mass_kg']:.0f} kg"
         ),
         (
             f"rec={format_duration(recording_elapsed_seconds)}  "
@@ -256,16 +230,17 @@ def save_meta() -> None:
         "output_width": OUTPUT_WIDTH,
         "output_height": OUTPUT_HEIGHT,
         "jpeg_quality": JPEG_QUALITY,
-        "targets_source": "telemetry.gameSteer/gameThrottle/gameBrake",
+        "targets_source": "telemetry.userSteer/userThrottle/userBrake",
+        "numeric_features": [
+            "truck_speed_kmh",
+            "truck_accel_kmh_s",
+            "speed_limit_kmh",
+        ],
     }
     META_PATH.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
-def run_test_mode(
-    controller: SwitchProControllerAdapter,
-    telemetry_adapter: HttpTelemetryAdapter,
-    truck_cfg: Dict[str, float],
-) -> None:
+def run_test_mode(telemetry_adapter: HttpTelemetryAdapter) -> None:
     print("Modo test activo.")
     print("Pulsa ESC para salir.")
 
@@ -289,10 +264,7 @@ def run_test_mode(
                 image = grab_frame(sct, CAPTURE_REGION)
                 processed_image = preprocess_frame(image)
 
-                _ = controller.read()
-                raw_telemetry = telemetry_adapter.read().to_dict()
-                telemetry = build_telemetry_frame(raw_telemetry, truck_cfg)
-
+                telemetry = telemetry_adapter.read().to_dict()
                 dataset_size_bytes = get_directory_size_bytes(DATASET_DIR)
 
                 frame_bgr = pil_to_bgr(processed_image)
@@ -311,30 +283,25 @@ def run_test_mode(
                 now = time.time()
                 if now - last_print >= 0.5:
                     print(
-                        f"target steer={telemetry['game_steer']:+.3f} "
-                        f"thr={telemetry['game_throttle']:.3f} "
-                        f"brk={telemetry['game_brake']:.3f} | "
-                        f"speed={telemetry['truck_speed_kmh']:.1f} "
-                        f"limit={telemetry['speed_limit_kmh']:.1f} "
-                        f"cargo={telemetry['cargo_mass_kg']:.0f} "
-                        f"power={telemetry['truck_power_hp']:.0f}"
+                        f"user steer={telemetry['user_steer']:+.3f} "
+                        f"thr={telemetry['user_throttle']:.3f} "
+                        f"brk={telemetry['user_brake']:.3f} | "
+                        f"speed={telemetry['truck_speed_kmh']:.1f} | "
+                        f"accel={telemetry['truck_accel_kmh_s']:+.2f} | "
+                        f"limit={telemetry['speed_limit_kmh']:.1f}"
                     )
                     last_print = now
     finally:
         cv2.destroyAllWindows()
 
 
-def run_dataset_mode(
-    controller: SwitchProControllerAdapter,
-    telemetry_adapter: HttpTelemetryAdapter,
-    truck_cfg: Dict[str, float],
-) -> None:
+def run_dataset_mode(telemetry_adapter: HttpTelemetryAdapter) -> None:
     writer = DatasetWriter(DATASET_DIR, IMAGES_DIR, CSV_PATH)
     writer.setup()
     save_meta()
 
     print(f"Dataset dir: {DATASET_DIR.resolve()}")
-    print("Pulsa R para empezar/parar grabación.")
+    print("Pulsa ! para empezar/parar grabación.")
     print("Pulsa ESC para salir.")
 
     recording = False
@@ -377,10 +344,7 @@ def run_dataset_mode(
 
                 image = grab_frame(sct, CAPTURE_REGION)
                 processed_image = preprocess_frame(image)
-
-                _ = controller.read()
-                raw_telemetry = telemetry_adapter.read().to_dict()
-                telemetry = build_telemetry_frame(raw_telemetry, truck_cfg)
+                telemetry = telemetry_adapter.read().to_dict()
 
                 now_time = time.time()
                 if recording and recording_started_at is not None:
@@ -420,7 +384,7 @@ def run_dataset_mode(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Captura de dataset multimodal ETS2")
+    parser = argparse.ArgumentParser(description="Captura de dataset ETS2 con user input")
     parser.add_argument(
         "--test",
         action="store_true",
@@ -432,26 +396,18 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
-    print("[Setup] Loading truck config...")
-    truck_cfg = load_truck_config()
-
-    print("[Setup] Connecting controller...")
-    controller = SwitchProControllerAdapter()
-    controller.connect()
-
-    print("[Setup] Connecting telemetry adapter...")
     telemetry_adapter = HttpTelemetryAdapter()
     telemetry_adapter.connect()
 
     try:
         if args.test:
-            run_test_mode(controller, telemetry_adapter, truck_cfg)
+            run_test_mode(telemetry_adapter)
         else:
-            run_dataset_mode(controller, telemetry_adapter, truck_cfg)
+            run_dataset_mode(telemetry_adapter)
     finally:
         telemetry_adapter.close()
-        controller.close()
 
 
 if __name__ == "__main__":
     main()
+    
