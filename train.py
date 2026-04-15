@@ -84,11 +84,8 @@ def train_one_epoch(
     total_count = 0
 
     for batch_idx, (images, features, targets) in enumerate(loader, start=1):
-        print("Loading features...")
         features = features.to(device)
-        print("Loading targets...")
         targets = targets.to(device)
-        print("Loading images...")
         images = images.to(device)
 
         optimizer.zero_grad()
@@ -101,7 +98,7 @@ def train_one_epoch(
         total_loss += loss.item() * batch_size
         total_count += batch_size
 
-        if batch_idx % 100 == 0:
+        if batch_idx % 10 == 0:
             print(f"[Training] Epoch {epoch}/{total_epochs} - batch {batch_idx} processed")
 
     return total_loss / max(total_count, 1)
