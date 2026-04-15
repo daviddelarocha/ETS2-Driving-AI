@@ -130,7 +130,7 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    device = torch.device("cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[Setup] Using device: {device}")
 
     print("[Setup] Building image transforms...")
