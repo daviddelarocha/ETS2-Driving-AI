@@ -11,3 +11,5 @@ scikit-learn
 matplotlib
 pydirectinput
 vgamepad
+lmdb
+tqdm

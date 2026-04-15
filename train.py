@@ -84,9 +84,12 @@ def train_one_epoch(
     total_count = 0
 
     for batch_idx, (images, features, targets) in enumerate(loader, start=1):
-        images = images.to(device)
+        print("Loading features...")
         features = features.to(device)
+        print("Loading targets...")
         targets = targets.to(device)
+        print("Loading images...")
+        images = images.to(device)
 
         optimizer.zero_grad()
         outputs = model(images, features)
