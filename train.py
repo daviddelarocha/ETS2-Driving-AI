@@ -12,6 +12,7 @@ import torch.nn as nn
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Subset
 from torchvision import models, transforms
+import torchvision.transforms.functional as F
 
 from driving_dataset import DrivingDataset
 
@@ -30,6 +31,7 @@ class DrivingModel(nn.Module):
     def __init__(self, pretrained: bool = True) -> None:
         super().__init__()
 
+        print(f"[Model] Building MobileNetV3 Small backbone | pretrained={pretrained}")
         weights = models.MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
         backbone = models.mobilenet_v3_small(weights=weights)
 
@@ -54,6 +56,39 @@ class DrivingModel(nn.Module):
             nn.ReLU(),
             nn.Linear(64, 3),
         )
+
+    def forward(self, image: torch.Tensor, numeric: torch.Tensor) -> torch.Tensor:
+        x_img = self.image_backbone(image)
+        x_img = self.image_pool(x_img)
+        x_img = torch.flatten(x_img, 1)
+
+        x_num = self.numeric_mlp(numeric)
+
+        x = torch.cat([x_img, x_num], dim=1)
+        return self.head(x)
+    
+class HideHUD:
+    def __init__(self, img_size: int):
+        self.img_size = img_size
+
+    def __call__(self, img):
+        # Convert to tensor if not already
+        if not isinstance(img, torch.Tensor):
+            img = F.to_tensor(img)
+
+        _, H, W = img.shape
+
+        # --- Bottom-left (speedometer) ---
+        h1 = int(H * 0.25)
+        w1 = int(W * 0.25)
+        img[:, H - h1:H, 0:w1] = 0.0
+
+        # --- Bottom-right (minimap) ---
+        h2 = int(H * 0.30)
+        w2 = int(W * 0.30)
+        img[:, H - h2:H, W - w2:W] = 0.0
+
+        return img
 
 def evaluate_loss(model: nn.Module, loader: DataLoader, criterion: nn.Module, device: torch.device) -> float:
     model.eval()
@@ -164,7 +199,7 @@ def main() -> None:
     print("[Setup] Building image transforms...")
     transform = transforms.Compose([
         transforms.Resize((args.img_size, args.img_size)),
-        transforms.ToTensor(),
+        HideHUD(args.img_size),
         transforms.Normalize(
             mean=[0.485, 0.456, 0.406],
             std=[0.229, 0.224, 0.225],

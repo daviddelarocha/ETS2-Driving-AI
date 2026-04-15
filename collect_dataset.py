@@ -29,7 +29,7 @@ OUTPUT_WIDTH = 640
 OUTPUT_HEIGHT = 360
 
 CAPTURE_REGION = None
-CAPTURE_MONITOR = 1
+CAPTURE_MONITOR = 2
 
 START_STOP_KEY = "!"
 QUIT_KEY = ":"
@@ -37,6 +37,11 @@ QUIT_KEY = ":"
 FONT_SCALE = 0.55
 FONT_THICKNESS = 1
 LINE_STEP = 22
+
+# Reference point for dataset size estimation
+REFERENCE_ROWS = 8590
+REFERENCE_SIZE_MB = 262.0
+ESTIMATED_BYTES_PER_ROW = (REFERENCE_SIZE_MB * 1024 * 1024) / REFERENCE_ROWS
 
 
 def format_duration(seconds: float) -> str:
@@ -47,18 +52,8 @@ def format_duration(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
-def get_directory_size_bytes(path: Path) -> int:
-    if not path.exists():
-        return 0
-
-    total = 0
-    for p in path.rglob("*"):
-        if p.is_file():
-            try:
-                total += p.stat().st_size
-            except OSError:
-                pass
-    return total
+def estimate_dataset_size_bytes(num_rows: int) -> int:
+    return int(num_rows * ESTIMATED_BYTES_PER_ROW)
 
 
 def format_bytes(num_bytes: int) -> str:
@@ -123,6 +118,9 @@ class DatasetWriter:
             return int(last) + 1
         except ValueError:
             return len(existing) + 1
+
+    def get_num_samples(self) -> int:
+        return max(0, self.index - 1)
 
     def write_sample(
         self,
@@ -243,7 +241,7 @@ def draw_overlay(
         ),
         (
             f"rec={format_duration(recording_elapsed_seconds)}  "
-            f"dataset={format_bytes(dataset_size_bytes)}  "
+            f"dataset~={format_bytes(dataset_size_bytes)}  "
             f"fps={CAPTURE_FPS:.1f}"
         ),
         "! = start/stop | : = exit",
@@ -262,6 +260,11 @@ def save_meta() -> None:
         "output_height": OUTPUT_HEIGHT,
         "jpeg_quality": JPEG_QUALITY,
         "targets_source": "switch_pro_controller",
+        "dataset_size_estimation": {
+            "reference_rows": REFERENCE_ROWS,
+            "reference_size_mb": REFERENCE_SIZE_MB,
+            "estimated_bytes_per_row": ESTIMATED_BYTES_PER_ROW,
+        },
         "numeric_features": [
             "truck_speed_kmh",
             "speed_limit_kmh",
@@ -307,7 +310,9 @@ def run_test_mode(
 
                 telemetry = telemetry_adapter.read().to_dict()
                 controller = controller_adapter.read().to_dict()
-                dataset_size_bytes = get_directory_size_bytes(DATASET_DIR)
+
+                # In test mode we don't scan the folder, just show 0 as estimate baseline
+                dataset_size_bytes = 0
 
                 frame_bgr = pil_to_bgr(processed_image)
                 frame_bgr = draw_overlay(
@@ -362,9 +367,6 @@ def run_dataset_mode(
     frame_interval = 1.0 / CAPTURE_FPS
     next_frame_time = time.perf_counter()
 
-    last_size_check = 0.0
-    dataset_size_bytes = get_directory_size_bytes(DATASET_DIR)
-
     try:
         with mss() as sct:
             while True:
@@ -404,9 +406,7 @@ def run_dataset_mode(
                 else:
                     recording_elapsed_seconds = accumulated_recording_seconds
 
-                if now_time - last_size_check >= 1.0:
-                    dataset_size_bytes = get_directory_size_bytes(DATASET_DIR)
-                    last_size_check = now_time
+                dataset_size_bytes = estimate_dataset_size_bytes(writer.get_num_samples())
 
                 frame_bgr = pil_to_bgr(processed_image)
                 frame_bgr = draw_overlay(

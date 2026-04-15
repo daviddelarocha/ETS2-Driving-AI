@@ -37,14 +37,14 @@ class DrivingModel(nn.Module):
         numeric_feature_dim = 10
 
         self.numeric_mlp = nn.Sequential(
-            nn.Linear(numeric_feature_dim, 32),
+            nn.Linear(numeric_feature_dim, 64),
             nn.ReLU(),
-            nn.Linear(32, 32),
+            nn.Linear(64, 64),
             nn.ReLU(),
         )
 
         self.head = nn.Sequential(
-            nn.Linear(image_feature_dim + 32, 128),
+            nn.Linear(image_feature_dim + 64, 128),
             nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(128, 64),
@@ -268,8 +268,14 @@ def add_text_block(
         "INPUTS / FEATURES",
         f"speed={telemetry['truck_speed_kmh']:.1f} km/h",
         f"limit={telemetry['speed_limit_kmh']:.1f} km/h",
-        f"cargo={telemetry['cargo_mass_kg']:.0f} kg",
-        f"power={telemetry['truck_power_hp']:.0f} hp",
+        f"gameSteer={telemetry['truck_game_steer']:+.3f}",
+        f"acc_x={telemetry['truck_acceleration_x']:+.3f}",
+        f"acc_y={telemetry['truck_acceleration_y']:+.3f}",
+        f"acc_z={telemetry['truck_acceleration_z']:+.3f}",
+        f"rpm={telemetry['truck_engine_rpm']:.0f}",
+        f"gear={telemetry['truck_displayed_gear']:.0f}",
+        f"trailer_attached={int(telemetry['trailer_attached'])}",
+        f"trailer_mass={telemetry['trailer_mass_kg']:.0f} kg",
         "",
         "REAL TARGETS",
         f"real steering={format_value(dataset_targets.get('steering'))}",
@@ -414,8 +420,14 @@ def load_dataset_rows(csv_path: Path, dataset_folder: Path) -> pd.DataFrame:
         "brake",
         "truck_speed_kmh",
         "speed_limit_kmh",
-        "cargo_mass_kg",
-        "truck_power_hp",
+        "truck_game_steer",
+        "truck_acceleration_x",
+        "truck_acceleration_y",
+        "truck_acceleration_z",
+        "truck_engine_rpm",
+        "truck_displayed_gear",
+        "trailer_attached",
+        "trailer_mass_kg",
     }
     missing = required_columns - set(df.columns)
     if missing:
@@ -479,8 +491,14 @@ def main() -> None:
             telemetry = {
                 "truck_speed_kmh": float(row["truck_speed_kmh"]),
                 "speed_limit_kmh": float(row["speed_limit_kmh"]),
-                "cargo_mass_kg": float(row["cargo_mass_kg"]),
-                "truck_power_hp": float(row["truck_power_hp"]),
+                "truck_game_steer": float(row["truck_game_steer"]),
+                "truck_acceleration_x": float(row["truck_acceleration_x"]),
+                "truck_acceleration_y": float(row["truck_acceleration_y"]),
+                "truck_acceleration_z": float(row["truck_acceleration_z"]),
+                "truck_engine_rpm": float(row["truck_engine_rpm"]),
+                "truck_displayed_gear": float(row["truck_displayed_gear"]),
+                "trailer_attached": float(row["trailer_attached"]),
+                "trailer_mass_kg": float(row["trailer_mass_kg"]),
             }
 
             dataset_targets = {

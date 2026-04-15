@@ -23,6 +23,7 @@ class DrivingModel(nn.Module):
     def __init__(self, pretrained: bool = True) -> None:
         super().__init__()
 
+        print(f"[Model] Building MobileNetV3 Small backbone | pretrained={pretrained}")
         weights = models.MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
         backbone = models.mobilenet_v3_small(weights=weights)
 
@@ -47,6 +48,16 @@ class DrivingModel(nn.Module):
             nn.ReLU(),
             nn.Linear(64, 3),
         )
+
+    def forward(self, image: torch.Tensor, numeric: torch.Tensor) -> torch.Tensor:
+        x_img = self.image_backbone(image)
+        x_img = self.image_pool(x_img)
+        x_img = torch.flatten(x_img, 1)
+
+        x_num = self.numeric_mlp(numeric)
+
+        x = torch.cat([x_img, x_num], dim=1)
+        return self.head(x)
 
 
 def parse_args() -> argparse.Namespace:

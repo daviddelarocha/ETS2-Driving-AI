@@ -26,7 +26,7 @@ from telemetry_adapter import HttpTelemetryAdapter
 
 MODEL_PATH = Path("artifacts/best_model.pt")
 
-CAPTURE_MONITOR = 1
+CAPTURE_MONITOR = 2
 CAPTURE_REGION = None
 
 DISPLAY_WIDTH = 960
@@ -86,14 +86,14 @@ class DrivingModel(nn.Module):
         numeric_feature_dim = 10
 
         self.numeric_mlp = nn.Sequential(
-            nn.Linear(numeric_feature_dim, 32),
+            nn.Linear(numeric_feature_dim, 64),
             nn.ReLU(),
-            nn.Linear(32, 32),
+            nn.Linear(64, 64),
             nn.ReLU(),
         )
 
         self.head = nn.Sequential(
-            nn.Linear(image_feature_dim + 32, 128),
+            nn.Linear(image_feature_dim + 64, 128),
             nn.ReLU(),
             nn.Dropout(0.2),
             nn.Linear(128, 64),
