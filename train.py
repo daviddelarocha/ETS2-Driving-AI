@@ -171,9 +171,27 @@ def main() -> None:
     print(f"[Data] Test samples: {len(test_ds)}")
 
     print("[Data] Building dataloaders...")
-    train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers)
-    val_loader = DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
-    test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=args.num_workers,
+        pin_memory=(device.type == "cuda"),
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=(device.type == "cuda"),
+    )
+    test_loader = DataLoader(
+        test_ds,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        pin_memory=(device.type == "cuda"),
+    )
 
     print("[Model] Initializing model...")
     model = DrivingModel(pretrained=not args.no_pretrained).to(device)
