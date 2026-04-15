@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Any
+from typing import Any, Dict
 
 import pygame
 
@@ -12,6 +12,13 @@ class ControllerState:
     throttle: float
     brake: float
     raw: Dict[str, Any]
+
+    def to_dict(self) -> Dict[str, float]:
+        return {
+            "steering": self.steering,
+            "throttle": self.throttle,
+            "brake": self.brake,
+        }
 
 
 class SwitchProControllerAdapter:
@@ -101,9 +108,9 @@ class SwitchProControllerAdapter:
         throttle = self._normalize_trigger(throttle_raw)
 
         raw = {
-            "axis_steering": steering_raw,
-            "axis_brake": brake_raw,
-            "axis_throttle": throttle_raw,
+            "axis_steering": float(steering_raw),
+            "axis_brake": float(brake_raw),
+            "axis_throttle": float(throttle_raw),
         }
 
         return ControllerState(
@@ -112,3 +119,4 @@ class SwitchProControllerAdapter:
             brake=brake,
             raw=raw,
         )
+    

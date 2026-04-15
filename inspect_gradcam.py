@@ -15,10 +15,10 @@ import torch
 import torch.nn as nn
 from torchvision import models, transforms
 
-
-MAX_SPEED_KMH = 130.0
-MAX_CARGO_MASS_KG = 50000.0
-MAX_POWER_HP = 1000.0
+MAX_SPEED = 130.0
+MAX_RPM = 3000.0
+MAX_GEAR = 12.0
+MAX_TRAILER_MASS = 50000.0
 
 TARGET_NAMES = ["steering", "throttle", "brake"]
 
@@ -34,7 +34,7 @@ class DrivingModel(nn.Module):
         self.image_pool = nn.AdaptiveAvgPool2d(1)
 
         image_feature_dim = 576
-        numeric_feature_dim = 4
+        numeric_feature_dim = 10
 
         self.numeric_mlp = nn.Sequential(
             nn.Linear(numeric_feature_dim, 32),
@@ -147,19 +147,30 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-
 def build_numeric_tensor(
     truck_speed_kmh: float,
     speed_limit_kmh: float,
-    cargo_mass_kg: float,
-    truck_power_hp: float,
+    truck_game_steer: float,
+    acc_x: float,
+    acc_y: float,
+    acc_z: float,
+    rpm: float,
+    gear: float,
+    trailer_attached: float,
+    trailer_mass: float,
 ) -> torch.Tensor:
     features = torch.tensor(
         [
-            truck_speed_kmh / MAX_SPEED_KMH,
-            speed_limit_kmh / MAX_SPEED_KMH,
-            cargo_mass_kg / MAX_CARGO_MASS_KG,
-            truck_power_hp / MAX_POWER_HP,
+            truck_speed_kmh / MAX_SPEED,
+            speed_limit_kmh / MAX_SPEED,
+            truck_game_steer,
+            acc_x,
+            acc_y,
+            acc_z,
+            rpm / MAX_RPM,
+            gear / MAX_GEAR,
+            trailer_attached,
+            trailer_mass / MAX_TRAILER_MASS,
         ],
         dtype=torch.float32,
     )
@@ -337,8 +348,14 @@ def process_single_sample(
     numeric_tensor = build_numeric_tensor(
         truck_speed_kmh=telemetry["truck_speed_kmh"],
         speed_limit_kmh=telemetry["speed_limit_kmh"],
-        cargo_mass_kg=telemetry["cargo_mass_kg"],
-        truck_power_hp=telemetry["truck_power_hp"],
+        truck_game_steer=telemetry["truck_game_steer"],
+        acc_x=telemetry["truck_acceleration_x"],
+        acc_y=telemetry["truck_acceleration_y"],
+        acc_z=telemetry["truck_acceleration_z"],
+        rpm=telemetry["truck_engine_rpm"],
+        gear=telemetry["truck_displayed_gear"],
+        trailer_attached=telemetry["trailer_attached"],
+        trailer_mass=telemetry["trailer_mass_kg"],
     )
 
     target_index = TARGET_NAMES.index(target_name)
