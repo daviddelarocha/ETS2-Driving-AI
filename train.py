@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader, Subset
 from torchvision import transforms
 
 from driving_dataset import DrivingDataset, HideHUD
-from model import DrivingModel
+from model import DrivingModel, WeightedSmoothL1Loss
 
 
 TARGET_NAMES = ["steering", "throttle", "brake"]
@@ -98,7 +98,7 @@ def train_one_epoch(
         total_loss += loss.item() * batch_size
         total_count += batch_size
 
-        if batch_idx % 10 == 0:
+        if batch_idx % 100 == 0:
             print(f"[Training] Epoch {epoch}/{total_epochs} - batch {batch_idx} processed")
 
     return total_loss / max(total_count, 1)
@@ -197,7 +197,7 @@ def main() -> None:
     model = DrivingModel(pretrained=not args.no_pretrained).to(device)
 
     print("[Setup] Creating loss and optimizer...")
-    criterion = nn.SmoothL1Loss()
+    criterion = WeightedSmoothL1Loss(weights=[3.0, 1.0, 1.0])
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     history = []
