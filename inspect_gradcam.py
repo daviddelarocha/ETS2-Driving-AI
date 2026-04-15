@@ -13,7 +13,9 @@ from PIL import Image
 
 import torch
 import torch.nn as nn
-from torchvision import models, transforms
+from torchvision import transforms
+
+from model import DrivingModel
 
 MAX_SPEED = 130.0
 MAX_RPM = 3000.0
@@ -21,46 +23,6 @@ MAX_GEAR = 12.0
 MAX_TRAILER_MASS = 50000.0
 
 TARGET_NAMES = ["steering", "throttle", "brake"]
-
-
-class DrivingModel(nn.Module):
-    def __init__(self, pretrained: bool = True) -> None:
-        super().__init__()
-
-        weights = models.MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
-        backbone = models.mobilenet_v3_small(weights=weights)
-
-        self.image_backbone = backbone.features
-        self.image_pool = nn.AdaptiveAvgPool2d(1)
-
-        image_feature_dim = 576
-        numeric_feature_dim = 10
-
-        self.numeric_mlp = nn.Sequential(
-            nn.Linear(numeric_feature_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, 64),
-            nn.ReLU(),
-        )
-
-        self.head = nn.Sequential(
-            nn.Linear(image_feature_dim + 64, 128),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 3),
-        )
-
-    def forward(self, image: torch.Tensor, numeric: torch.Tensor) -> torch.Tensor:
-        x_img = self.image_backbone(image)
-        x_img = self.image_pool(x_img)
-        x_img = torch.flatten(x_img, 1)
-
-        x_num = self.numeric_mlp(numeric)
-
-        x = torch.cat([x_img, x_num], dim=1)
-        return self.head(x)
 
 
 class GradCAM:

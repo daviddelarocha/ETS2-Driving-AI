@@ -3,7 +3,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict
 
+import numpy as np
+import vgamepad as vg
+
 import pygame
+
+# Real controller config (used for toggle + optional manual passthrough)
+JOYSTICK_INDEX = 0
+CONTROLLER_DEADZONE = 0.08
+
+# Axis mapping for Switch controller
+AXIS_STEERING = 0
+AXIS_BRAKE = 4
+AXIS_THROTTLE = 5
+
+# IMPORTANT: adjust if your R button has another index
+BUTTON_TOGGLE_AUTOPILOT = 10
 
 
 @dataclass
@@ -120,3 +135,104 @@ class SwitchProControllerAdapter:
             raw=raw,
         )
     
+# =========================
+# Real controller reader
+# =========================
+
+class SwitchController:
+    def __init__(
+        self,
+        joystick_index: int = JOYSTICK_INDEX,
+        deadzone: float = CONTROLLER_DEADZONE,
+        axis_steering: int = AXIS_STEERING,
+        axis_brake: int = AXIS_BRAKE,
+        axis_throttle: int = AXIS_THROTTLE,
+    ) -> None:
+        self.joystick_index = joystick_index
+        self.deadzone = deadzone
+        self.axis_steering = axis_steering
+        self.axis_brake = axis_brake
+        self.axis_throttle = axis_throttle
+        self.joystick: pygame.joystick.Joystick | None = None
+
+    def connect(self) -> None:
+        pygame.init()
+        pygame.joystick.init()
+
+        count = pygame.joystick.get_count()
+        if count <= self.joystick_index:
+            raise RuntimeError(
+                f"No controller found at index {self.joystick_index}. Controllers detected: {count}"
+            )
+
+        js = pygame.joystick.Joystick(self.joystick_index)
+        js.init()
+        self.joystick = js
+
+        print("[Controller] Connected")
+        print(f"[Controller] name={js.get_name()}")
+        print(f"[Controller] axes={js.get_numaxes()}")
+        print(f"[Controller] buttons={js.get_numbuttons()}")
+        print(f"[Controller] hats={js.get_numhats()}")
+
+    def close(self) -> None:
+        try:
+            if self.joystick is not None:
+                self.joystick.quit()
+        finally:
+            pygame.joystick.quit()
+            pygame.quit()
+
+    def _apply_deadzone(self, value: float) -> float:
+        if abs(value) < self.deadzone:
+            return 0.0
+        return float(value)
+
+    def _normalize_trigger(self, value: float) -> float:
+        out = (value + 1.0) / 2.0
+        return max(0.0, min(1.0, float(out)))
+
+    def read(self) -> Dict[str, float]:
+        if self.joystick is None:
+            raise RuntimeError("Controller not connected")
+
+        pygame.event.pump()
+
+        steering_raw = self.joystick.get_axis(self.axis_steering)
+        brake_raw = self.joystick.get_axis(self.axis_brake)
+        throttle_raw = self.joystick.get_axis(self.axis_throttle)
+
+        return {
+            "steering": self._apply_deadzone(steering_raw),
+            "brake": self._normalize_trigger(brake_raw),
+            "throttle": self._normalize_trigger(throttle_raw),
+            "button_toggle": float(self.joystick.get_button(BUTTON_TOGGLE_AUTOPILOT)),
+        }
+
+
+# =========================
+# Virtual controller output
+# =========================
+
+class VirtualXboxController:
+    def __init__(self) -> None:
+        self.gamepad = vg.VX360Gamepad()
+
+    def reset(self) -> None:
+        self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=0.0)
+        self.gamepad.left_trigger_float(value_float=0.0)
+        self.gamepad.right_trigger_float(value_float=0.0)
+        self.gamepad.update()
+
+    def apply_controls(self, steering: float, throttle: float, brake: float) -> None:
+        steering = float(np.clip(steering, -1.0, 1.0))
+        throttle = float(np.clip(throttle, 0.0, 1.0))
+        brake = float(np.clip(brake, 0.0, 1.0))
+
+        self.gamepad.left_joystick_float(
+            x_value_float=steering,
+            y_value_float=0.0,
+        )
+        self.gamepad.right_trigger_float(value_float=throttle)
+        self.gamepad.left_trigger_float(value_float=brake)
+        self.gamepad.update()

@@ -7,6 +7,7 @@ import pandas as pd
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
+import torchvision.transforms.functional as F
 
 
 MAX_SPEED = 130.0
@@ -114,3 +115,26 @@ class DrivingDataset(Dataset):
         )
 
         return image, features, target
+    
+class HideHUD:
+    def __init__(self, img_size: int):
+        self.img_size = img_size
+
+    def __call__(self, img):
+        # Convert to tensor if not already
+        if not isinstance(img, torch.Tensor):
+            img = F.to_tensor(img)
+
+        _, H, W = img.shape
+
+        # --- Bottom-left (speedometer) ---
+        h1 = int(H * 0.25)
+        w1 = int(W * 0.25)
+        img[:, H - h1:H, 0:w1] = 0.0
+
+        # --- Bottom-right (minimap) ---
+        h2 = int(H * 0.30)
+        w2 = int(W * 0.30)
+        img[:, H - h2:H, W - w2:W] = 0.0
+
+        return img

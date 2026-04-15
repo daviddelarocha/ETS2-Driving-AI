@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import time
 from pathlib import Path
 from typing import Dict
@@ -9,15 +8,14 @@ from typing import Dict
 import cv2
 import keyboard
 import numpy as np
-import pygame
 import torch
-import torch.nn as nn
-import vgamepad as vg
 from mss import mss
 from PIL import Image
-from torchvision import models, transforms
+from torchvision import transforms
 
 from telemetry_adapter import HttpTelemetryAdapter
+from model import DrivingModel
+from controller_adapter import SwitchController, VirtualXboxController
 
 
 # =========================
@@ -33,18 +31,6 @@ DISPLAY_WIDTH = 960
 DISPLAY_HEIGHT = 540
 
 QUIT_KEY = ":"
-
-# Real controller config (used for toggle + optional manual passthrough)
-JOYSTICK_INDEX = 0
-CONTROLLER_DEADZONE = 0.08
-
-# Axis mapping for Switch controller
-AXIS_STEERING = 0
-AXIS_BRAKE = 4
-AXIS_THROTTLE = 5
-
-# IMPORTANT: adjust if your R button has another index
-BUTTON_TOGGLE_AUTOPILOT = 10
 
 # Telemetry normalization
 MAX_SPEED = 130.0
@@ -66,153 +52,6 @@ STATUS_WIDTH = 260
 STATUS_HEIGHT = 90
 STATUS_FONT_SCALE = 0.70
 STATUS_FONT_THICKNESS = 2
-
-
-# =========================
-# Model
-# =========================
-
-class DrivingModel(nn.Module):
-    def __init__(self, pretrained: bool = True) -> None:
-        super().__init__()
-
-        weights = models.MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
-        backbone = models.mobilenet_v3_small(weights=weights)
-
-        self.image_backbone = backbone.features
-        self.image_pool = nn.AdaptiveAvgPool2d(1)
-
-        image_feature_dim = 576
-        numeric_feature_dim = 10
-
-        self.numeric_mlp = nn.Sequential(
-            nn.Linear(numeric_feature_dim, 64),
-            nn.ReLU(),
-            nn.Linear(64, 64),
-            nn.ReLU(),
-        )
-
-        self.head = nn.Sequential(
-            nn.Linear(image_feature_dim + 64, 128),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 3),
-        )
-
-    def forward(self, image: torch.Tensor, numeric: torch.Tensor) -> torch.Tensor:
-        x_img = self.image_backbone(image)
-        x_img = self.image_pool(x_img)
-        x_img = torch.flatten(x_img, 1)
-
-        x_num = self.numeric_mlp(numeric)
-
-        x = torch.cat([x_img, x_num], dim=1)
-        return self.head(x)
-
-
-# =========================
-# Real controller reader
-# =========================
-
-class SwitchController:
-    def __init__(
-        self,
-        joystick_index: int = JOYSTICK_INDEX,
-        deadzone: float = CONTROLLER_DEADZONE,
-        axis_steering: int = AXIS_STEERING,
-        axis_brake: int = AXIS_BRAKE,
-        axis_throttle: int = AXIS_THROTTLE,
-    ) -> None:
-        self.joystick_index = joystick_index
-        self.deadzone = deadzone
-        self.axis_steering = axis_steering
-        self.axis_brake = axis_brake
-        self.axis_throttle = axis_throttle
-        self.joystick: pygame.joystick.Joystick | None = None
-
-    def connect(self) -> None:
-        pygame.init()
-        pygame.joystick.init()
-
-        count = pygame.joystick.get_count()
-        if count <= self.joystick_index:
-            raise RuntimeError(
-                f"No controller found at index {self.joystick_index}. Controllers detected: {count}"
-            )
-
-        js = pygame.joystick.Joystick(self.joystick_index)
-        js.init()
-        self.joystick = js
-
-        print("[Controller] Connected")
-        print(f"[Controller] name={js.get_name()}")
-        print(f"[Controller] axes={js.get_numaxes()}")
-        print(f"[Controller] buttons={js.get_numbuttons()}")
-        print(f"[Controller] hats={js.get_numhats()}")
-
-    def close(self) -> None:
-        try:
-            if self.joystick is not None:
-                self.joystick.quit()
-        finally:
-            pygame.joystick.quit()
-            pygame.quit()
-
-    def _apply_deadzone(self, value: float) -> float:
-        if abs(value) < self.deadzone:
-            return 0.0
-        return float(value)
-
-    def _normalize_trigger(self, value: float) -> float:
-        out = (value + 1.0) / 2.0
-        return max(0.0, min(1.0, float(out)))
-
-    def read(self) -> Dict[str, float]:
-        if self.joystick is None:
-            raise RuntimeError("Controller not connected")
-
-        pygame.event.pump()
-
-        steering_raw = self.joystick.get_axis(self.axis_steering)
-        brake_raw = self.joystick.get_axis(self.axis_brake)
-        throttle_raw = self.joystick.get_axis(self.axis_throttle)
-
-        return {
-            "steering": self._apply_deadzone(steering_raw),
-            "brake": self._normalize_trigger(brake_raw),
-            "throttle": self._normalize_trigger(throttle_raw),
-            "button_toggle": float(self.joystick.get_button(BUTTON_TOGGLE_AUTOPILOT)),
-        }
-
-
-# =========================
-# Virtual controller output
-# =========================
-
-class VirtualXboxController:
-    def __init__(self) -> None:
-        self.gamepad = vg.VX360Gamepad()
-
-    def reset(self) -> None:
-        self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=0.0)
-        self.gamepad.left_trigger_float(value_float=0.0)
-        self.gamepad.right_trigger_float(value_float=0.0)
-        self.gamepad.update()
-
-    def apply_controls(self, steering: float, throttle: float, brake: float) -> None:
-        steering = float(np.clip(steering, -1.0, 1.0))
-        throttle = float(np.clip(throttle, 0.0, 1.0))
-        brake = float(np.clip(brake, 0.0, 1.0))
-
-        self.gamepad.left_joystick_float(
-            x_value_float=steering,
-            y_value_float=0.0,
-        )
-        self.gamepad.right_trigger_float(value_float=throttle)
-        self.gamepad.left_trigger_float(value_float=brake)
-        self.gamepad.update()
 
 
 # =========================
