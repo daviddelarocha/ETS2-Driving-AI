@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import time
 from pathlib import Path
 from typing import Dict
@@ -9,48 +8,35 @@ from typing import Dict
 import cv2
 import keyboard
 import numpy as np
-import pygame
 import torch
-import torch.nn as nn
-import vgamepad as vg
 from mss import mss
 from PIL import Image
-from torchvision import models, transforms
+from torchvision import transforms
 
 from telemetry_adapter import HttpTelemetryAdapter
+from model import DrivingModel
+from controller_adapter import SwitchController, VirtualXboxController
 
 
 # =========================
 # Config
 # =========================
 
-MODEL_PATH = Path("artifacts_puns/best_model.pt")
-TRUCK_CONFIG_PATH = Path("truck_config.json")
+MODEL_PATH = Path("artifacts/best_model.pt")
 
-CAPTURE_MONITOR = 1
+CAPTURE_MONITOR = 2
 CAPTURE_REGION = None
 
 DISPLAY_WIDTH = 960
 DISPLAY_HEIGHT = 540
 
-QUIT_KEY = "esc"
-
-# Real controller config (used for toggle + optional manual passthrough)
-JOYSTICK_INDEX = 0
-CONTROLLER_DEADZONE = 0.08
-
-# Axis mapping for Switch controller
-AXIS_STEERING = 0
-AXIS_BRAKE = 4
-AXIS_THROTTLE = 5
-
-# IMPORTANT: adjust if your R button has another index
-BUTTON_TOGGLE_AUTOPILOT = 10
+QUIT_KEY = ":"
 
 # Telemetry normalization
-MAX_SPEED_KMH = 130.0
-MAX_CARGO_MASS_KG = 50000.0
-MAX_POWER_HP = 1000.0
+MAX_SPEED = 130.0
+MAX_RPM = 3000.0
+MAX_GEAR = 12.0
+MAX_TRAILER_MASS = 50000.0
 
 # Optional output smoothing
 EMA_ALPHA = 0.30
@@ -66,153 +52,6 @@ STATUS_WIDTH = 260
 STATUS_HEIGHT = 90
 STATUS_FONT_SCALE = 0.70
 STATUS_FONT_THICKNESS = 2
-
-
-# =========================
-# Model
-# =========================
-
-class DrivingModel(nn.Module):
-    def __init__(self, pretrained: bool = True) -> None:
-        super().__init__()
-
-        weights = models.MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
-        backbone = models.mobilenet_v3_small(weights=weights)
-
-        self.image_backbone = backbone.features
-        self.image_pool = nn.AdaptiveAvgPool2d(1)
-
-        image_feature_dim = 576
-        numeric_feature_dim = 4
-
-        self.numeric_mlp = nn.Sequential(
-            nn.Linear(numeric_feature_dim, 32),
-            nn.ReLU(),
-            nn.Linear(32, 32),
-            nn.ReLU(),
-        )
-
-        self.head = nn.Sequential(
-            nn.Linear(image_feature_dim + 32, 128),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 3),
-        )
-
-    def forward(self, image: torch.Tensor, numeric: torch.Tensor) -> torch.Tensor:
-        x_img = self.image_backbone(image)
-        x_img = self.image_pool(x_img)
-        x_img = torch.flatten(x_img, 1)
-
-        x_num = self.numeric_mlp(numeric)
-
-        x = torch.cat([x_img, x_num], dim=1)
-        return self.head(x)
-
-
-# =========================
-# Real controller reader
-# =========================
-
-class SwitchController:
-    def __init__(
-        self,
-        joystick_index: int = JOYSTICK_INDEX,
-        deadzone: float = CONTROLLER_DEADZONE,
-        axis_steering: int = AXIS_STEERING,
-        axis_brake: int = AXIS_BRAKE,
-        axis_throttle: int = AXIS_THROTTLE,
-    ) -> None:
-        self.joystick_index = joystick_index
-        self.deadzone = deadzone
-        self.axis_steering = axis_steering
-        self.axis_brake = axis_brake
-        self.axis_throttle = axis_throttle
-        self.joystick: pygame.joystick.Joystick | None = None
-
-    def connect(self) -> None:
-        pygame.init()
-        pygame.joystick.init()
-
-        count = pygame.joystick.get_count()
-        if count <= self.joystick_index:
-            raise RuntimeError(
-                f"No controller found at index {self.joystick_index}. Controllers detected: {count}"
-            )
-
-        js = pygame.joystick.Joystick(self.joystick_index)
-        js.init()
-        self.joystick = js
-
-        print("[Controller] Connected")
-        print(f"[Controller] name={js.get_name()}")
-        print(f"[Controller] axes={js.get_numaxes()}")
-        print(f"[Controller] buttons={js.get_numbuttons()}")
-        print(f"[Controller] hats={js.get_numhats()}")
-
-    def close(self) -> None:
-        try:
-            if self.joystick is not None:
-                self.joystick.quit()
-        finally:
-            pygame.joystick.quit()
-            pygame.quit()
-
-    def _apply_deadzone(self, value: float) -> float:
-        if abs(value) < self.deadzone:
-            return 0.0
-        return float(value)
-
-    def _normalize_trigger(self, value: float) -> float:
-        out = (value + 1.0) / 2.0
-        return max(0.0, min(1.0, float(out)))
-
-    def read(self) -> Dict[str, float]:
-        if self.joystick is None:
-            raise RuntimeError("Controller not connected")
-
-        pygame.event.pump()
-
-        steering_raw = self.joystick.get_axis(self.axis_steering)
-        brake_raw = self.joystick.get_axis(self.axis_brake)
-        throttle_raw = self.joystick.get_axis(self.axis_throttle)
-
-        return {
-            "steering": self._apply_deadzone(steering_raw),
-            "brake": self._normalize_trigger(brake_raw),
-            "throttle": self._normalize_trigger(throttle_raw),
-            "button_toggle": float(self.joystick.get_button(BUTTON_TOGGLE_AUTOPILOT)),
-        }
-
-
-# =========================
-# Virtual controller output
-# =========================
-
-class VirtualXboxController:
-    def __init__(self) -> None:
-        self.gamepad = vg.VX360Gamepad()
-
-    def reset(self) -> None:
-        self.gamepad.left_joystick_float(x_value_float=0.0, y_value_float=0.0)
-        self.gamepad.left_trigger_float(value_float=0.0)
-        self.gamepad.right_trigger_float(value_float=0.0)
-        self.gamepad.update()
-
-    def apply_controls(self, steering: float, throttle: float, brake: float) -> None:
-        steering = float(np.clip(steering, -1.0, 1.0))
-        throttle = float(np.clip(throttle, 0.0, 1.0))
-        brake = float(np.clip(brake, 0.0, 1.0))
-
-        self.gamepad.left_joystick_float(
-            x_value_float=steering,
-            y_value_float=0.0,
-        )
-        self.gamepad.right_trigger_float(value_float=throttle)
-        self.gamepad.left_trigger_float(value_float=brake)
-        self.gamepad.update()
 
 
 # =========================
@@ -234,13 +73,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_truck_config(path: Path = TRUCK_CONFIG_PATH) -> Dict[str, float]:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return {
-        "truck_power_hp": float(data["truck_power_hp"]),
-    }
-
-
 def grab_frame(sct: mss, region: Dict[str, int] | None = None) -> Image.Image:
     if region is None:
         raw = sct.grab(sct.monitors[CAPTURE_MONITOR])
@@ -258,13 +90,19 @@ def preprocess_for_display(image: Image.Image) -> Image.Image:
     return image.resize((DISPLAY_WIDTH, DISPLAY_HEIGHT), Image.Resampling.LANCZOS)
 
 
-def build_numeric_features(raw_telemetry: Dict[str, float], truck_cfg: Dict[str, float]) -> torch.Tensor:
+def build_numeric_features(raw: Dict[str, float]) -> torch.Tensor:
     features = torch.tensor(
         [
-            float(raw_telemetry["truck_speed_kmh"]) / MAX_SPEED_KMH,
-            float(raw_telemetry["speed_limit_kmh"]) / MAX_SPEED_KMH,
-            float(raw_telemetry["cargo_mass_kg"]) / MAX_CARGO_MASS_KG,
-            float(truck_cfg["truck_power_hp"]) / MAX_POWER_HP,
+            float(raw["truck_speed_kmh"]) / MAX_SPEED,
+            float(raw["speed_limit_kmh"]) / MAX_SPEED,
+            float(raw["truck_game_steer"]),
+            float(raw["truck_acceleration_x"]),
+            float(raw["truck_acceleration_y"]),
+            float(raw["truck_acceleration_z"]),
+            float(raw["truck_engine_rpm"]) / MAX_RPM,
+            float(raw["truck_displayed_gear"]) / MAX_GEAR,
+            float(raw["trailer_attached"]),
+            float(raw["trailer_mass_kg"]) / MAX_TRAILER_MASS,
         ],
         dtype=torch.float32,
     )
@@ -342,12 +180,22 @@ def draw_overlay(
             f"brk={controller_state['brake']:.3f}"
         ),
         (
-            f"telemetry | speed={telemetry['truck_speed_kmh']:.1f} km/h  "
-            f"limit={telemetry['speed_limit_kmh']:.1f} km/h"
+            f"speed | v={telemetry['truck_speed_kmh']:.1f} km/h  "
+            f"limit={telemetry['speed_limit_kmh']:.1f} km/h  "
+            f"gameSteer={telemetry['truck_game_steer']:+.3f}"
         ),
         (
-            f"truck | cargo={telemetry['cargo_mass_kg']:.0f} kg  "
-            f"power={telemetry['truck_power_hp']:.0f} hp"
+            f"accel | x={telemetry['truck_acceleration_x']:+.3f}  "
+            f"y={telemetry['truck_acceleration_y']:+.3f}  "
+            f"z={telemetry['truck_acceleration_z']:+.3f}"
+        ),
+        (
+            f"engine | rpm={telemetry['truck_engine_rpm']:.0f}  "
+            f"gear={telemetry['truck_displayed_gear']:.0f}"
+        ),
+        (
+            f"trailer | attached={int(telemetry['trailer_attached'])}  "
+            f"mass={telemetry['trailer_mass_kg']:.0f} kg"
         ),
         f"Toggle autopilot: controller R button (index {BUTTON_TOGGLE_AUTOPILOT})",
         "ESC = exit",
@@ -405,14 +253,8 @@ def main() -> None:
     if not MODEL_PATH.exists():
         raise FileNotFoundError(f"Model not found: {MODEL_PATH}")
 
-    if not TRUCK_CONFIG_PATH.exists():
-        raise FileNotFoundError(f"Truck config not found: {TRUCK_CONFIG_PATH}")
-
     print(f"[Setup] Debug window: {'ON' if debug_enabled else 'OFF'}")
     print(f"[Setup] Manual passthrough: {'ON' if manual_passthrough else 'OFF'}")
-
-    print("[Setup] Loading truck config...")
-    truck_cfg = load_truck_config()
 
     print("[Setup] Loading model checkpoint...")
     ckpt = torch.load(MODEL_PATH, map_location="cpu")
@@ -497,12 +339,18 @@ def main() -> None:
                 telemetry = {
                     "truck_speed_kmh": raw_telemetry["truck_speed_kmh"],
                     "speed_limit_kmh": raw_telemetry["speed_limit_kmh"],
-                    "cargo_mass_kg": raw_telemetry["cargo_mass_kg"],
-                    "truck_power_hp": truck_cfg["truck_power_hp"],
+                    "truck_game_steer": raw_telemetry["truck_game_steer"],
+                    "truck_acceleration_x": raw_telemetry["truck_acceleration_x"],
+                    "truck_acceleration_y": raw_telemetry["truck_acceleration_y"],
+                    "truck_acceleration_z": raw_telemetry["truck_acceleration_z"],
+                    "truck_engine_rpm": raw_telemetry["truck_engine_rpm"],
+                    "truck_displayed_gear": raw_telemetry["truck_displayed_gear"],
+                    "trailer_attached": raw_telemetry["trailer_attached"],
+                    "trailer_mass_kg": raw_telemetry["trailer_mass_kg"],
                 }
 
                 image_tensor = transform(image).unsqueeze(0)
-                numeric_tensor = build_numeric_features(raw_telemetry, truck_cfg)
+                numeric_tensor = build_numeric_features(raw_telemetry)
 
                 with torch.no_grad():
                     output = model(image_tensor, numeric_tensor).squeeze(0).cpu().numpy()

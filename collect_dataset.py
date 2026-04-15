@@ -13,6 +13,7 @@ import numpy as np
 from mss import mss
 from PIL import Image
 
+from controller_adapter import SwitchProControllerAdapter
 from telemetry_adapter import HttpTelemetryAdapter
 
 
@@ -28,14 +29,19 @@ OUTPUT_WIDTH = 640
 OUTPUT_HEIGHT = 360
 
 CAPTURE_REGION = None
-CAPTURE_MONITOR = 1
+CAPTURE_MONITOR = 2
 
 START_STOP_KEY = "!"
-QUIT_KEY = "esc"
+QUIT_KEY = ":"
 
 FONT_SCALE = 0.55
 FONT_THICKNESS = 1
 LINE_STEP = 22
+
+# Reference point for dataset size estimation
+REFERENCE_ROWS = 8590
+REFERENCE_SIZE_MB = 262.0
+ESTIMATED_BYTES_PER_ROW = (REFERENCE_SIZE_MB * 1024 * 1024) / REFERENCE_ROWS
 
 
 def format_duration(seconds: float) -> str:
@@ -46,18 +52,8 @@ def format_duration(seconds: float) -> str:
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
 
 
-def get_directory_size_bytes(path: Path) -> int:
-    if not path.exists():
-        return 0
-
-    total = 0
-    for p in path.rglob("*"):
-        if p.is_file():
-            try:
-                total += p.stat().st_size
-            except OSError:
-                pass
-    return total
+def estimate_dataset_size_bytes(num_rows: int) -> int:
+    return int(num_rows * ESTIMATED_BYTES_PER_ROW)
 
 
 def format_bytes(num_bytes: int) -> str:
@@ -94,8 +90,15 @@ class DatasetWriter:
             "throttle",
             "brake",
             "truck_speed_kmh",
-            "truck_accel_kmh_s",
             "speed_limit_kmh",
+            "truck_game_steer",
+            "truck_acceleration_x",
+            "truck_acceleration_y",
+            "truck_acceleration_z",
+            "truck_engine_rpm",
+            "truck_displayed_gear",
+            "trailer_attached",
+            "trailer_mass_kg",
         ]
 
         self.csv_writer = csv.DictWriter(self.csv_file, fieldnames=fieldnames)
@@ -109,17 +112,22 @@ class DatasetWriter:
         existing = sorted(self.images_dir.glob("*.jpg"))
         if not existing:
             return 1
+
         last = existing[-1].stem
         try:
             return int(last) + 1
         except ValueError:
             return len(existing) + 1
 
+    def get_num_samples(self) -> int:
+        return max(0, self.index - 1)
+
     def write_sample(
         self,
         pil_image: Image.Image,
         timestamp: float,
         telemetry: Dict[str, float],
+        controller: Dict[str, float],
     ) -> None:
         if self.csv_writer is None:
             raise RuntimeError("DatasetWriter no inicializado")
@@ -134,12 +142,19 @@ class DatasetWriter:
             "sample_id": sample_id,
             "timestamp": timestamp,
             "image_path": f"images/{image_filename}",
-            "steering": telemetry["user_steer"],
-            "throttle": telemetry["user_throttle"],
-            "brake": telemetry["user_brake"],
+            "steering": controller["steering"],
+            "throttle": controller["throttle"],
+            "brake": controller["brake"],
             "truck_speed_kmh": telemetry["truck_speed_kmh"],
-            "truck_accel_kmh_s": telemetry["truck_accel_kmh_s"],
             "speed_limit_kmh": telemetry["speed_limit_kmh"],
+            "truck_game_steer": telemetry["truck_game_steer"],
+            "truck_acceleration_x": telemetry["truck_acceleration_x"],
+            "truck_acceleration_y": telemetry["truck_acceleration_y"],
+            "truck_acceleration_z": telemetry["truck_acceleration_z"],
+            "truck_engine_rpm": telemetry["truck_engine_rpm"],
+            "truck_displayed_gear": telemetry["truck_displayed_gear"],
+            "trailer_attached": telemetry["trailer_attached"],
+            "trailer_mass_kg": telemetry["trailer_mass_kg"],
         }
 
         self.csv_writer.writerow(row)
@@ -191,6 +206,7 @@ def draw_text_lines(frame_bgr: np.ndarray, lines: list[str]) -> np.ndarray:
 def draw_overlay(
     frame_bgr: np.ndarray,
     telemetry: Dict[str, float],
+    controller: Dict[str, float],
     recording: bool,
     is_test: bool,
     recording_elapsed_seconds: float,
@@ -201,21 +217,34 @@ def draw_overlay(
     lines = [
         status_line,
         (
-            f"user input | steer={telemetry['user_steer']:+.3f}  "
-            f"thr={telemetry['user_throttle']:.3f}  "
-            f"brk={telemetry['user_brake']:.3f}"
+            f"target pad | steer={controller['steering']:+.3f}  "
+            f"thr={controller['throttle']:.3f}  "
+            f"brk={controller['brake']:.3f}"
         ),
         (
             f"telemetry | speed={telemetry['truck_speed_kmh']:.1f} km/h  "
-            f"accel={telemetry['truck_accel_kmh_s']:+.2f} km/h/s  "
-            f"limit={telemetry['speed_limit_kmh']:.1f} km/h"
+            f"limit={telemetry['speed_limit_kmh']:.1f} km/h  "
+            f"gameSteer={telemetry['truck_game_steer']:+.3f}"
+        ),
+        (
+            f"acc xyz | x={telemetry['truck_acceleration_x']:+.3f}  "
+            f"y={telemetry['truck_acceleration_y']:+.3f}  "
+            f"z={telemetry['truck_acceleration_z']:+.3f}"
+        ),
+        (
+            f"engine | rpm={telemetry['truck_engine_rpm']:.0f}  "
+            f"gear={telemetry['truck_displayed_gear']:.0f}"
+        ),
+        (
+            f"trailer | attached={int(telemetry['trailer_attached'])}  "
+            f"mass={telemetry['trailer_mass_kg']:.0f} kg"
         ),
         (
             f"rec={format_duration(recording_elapsed_seconds)}  "
-            f"dataset={format_bytes(dataset_size_bytes)}  "
+            f"dataset~={format_bytes(dataset_size_bytes)}  "
             f"fps={CAPTURE_FPS:.1f}"
         ),
-        "R = start/stop | ESC = exit",
+        "! = start/stop | : = exit",
     ]
 
     return draw_text_lines(frame_bgr, lines)
@@ -230,19 +259,34 @@ def save_meta() -> None:
         "output_width": OUTPUT_WIDTH,
         "output_height": OUTPUT_HEIGHT,
         "jpeg_quality": JPEG_QUALITY,
-        "targets_source": "telemetry.userSteer/userThrottle/userBrake",
+        "targets_source": "switch_pro_controller",
+        "dataset_size_estimation": {
+            "reference_rows": REFERENCE_ROWS,
+            "reference_size_mb": REFERENCE_SIZE_MB,
+            "estimated_bytes_per_row": ESTIMATED_BYTES_PER_ROW,
+        },
         "numeric_features": [
             "truck_speed_kmh",
-            "truck_accel_kmh_s",
             "speed_limit_kmh",
+            "truck_game_steer",
+            "truck_acceleration_x",
+            "truck_acceleration_y",
+            "truck_acceleration_z",
+            "truck_engine_rpm",
+            "truck_displayed_gear",
+            "trailer_attached",
+            "trailer_mass_kg",
         ],
     }
     META_PATH.write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
-def run_test_mode(telemetry_adapter: HttpTelemetryAdapter) -> None:
+def run_test_mode(
+    telemetry_adapter: HttpTelemetryAdapter,
+    controller_adapter: SwitchProControllerAdapter,
+) -> None:
     print("Modo test activo.")
-    print("Pulsa ESC para salir.")
+    print("Pulsa ':' para salir.")
 
     frame_interval = 1.0 / CAPTURE_FPS
     next_frame_time = time.perf_counter()
@@ -265,12 +309,16 @@ def run_test_mode(telemetry_adapter: HttpTelemetryAdapter) -> None:
                 processed_image = preprocess_frame(image)
 
                 telemetry = telemetry_adapter.read().to_dict()
-                dataset_size_bytes = get_directory_size_bytes(DATASET_DIR)
+                controller = controller_adapter.read().to_dict()
+
+                # In test mode we don't scan the folder, just show 0 as estimate baseline
+                dataset_size_bytes = 0
 
                 frame_bgr = pil_to_bgr(processed_image)
                 frame_bgr = draw_overlay(
                     frame_bgr=frame_bgr,
                     telemetry=telemetry,
+                    controller=controller,
                     recording=False,
                     is_test=True,
                     recording_elapsed_seconds=0.0,
@@ -283,26 +331,33 @@ def run_test_mode(telemetry_adapter: HttpTelemetryAdapter) -> None:
                 now = time.time()
                 if now - last_print >= 0.5:
                     print(
-                        f"user steer={telemetry['user_steer']:+.3f} "
-                        f"thr={telemetry['user_throttle']:.3f} "
-                        f"brk={telemetry['user_brake']:.3f} | "
-                        f"speed={telemetry['truck_speed_kmh']:.1f} | "
-                        f"accel={telemetry['truck_accel_kmh_s']:+.2f} | "
-                        f"limit={telemetry['speed_limit_kmh']:.1f}"
+                        f"pad steer={controller['steering']:+.3f} "
+                        f"thr={controller['throttle']:.3f} "
+                        f"brk={controller['brake']:.3f} | "
+                        f"speed={telemetry['truck_speed_kmh']:.1f} "
+                        f"limit={telemetry['speed_limit_kmh']:.1f} "
+                        f"gameSteer={telemetry['truck_game_steer']:+.3f} "
+                        f"rpm={telemetry['truck_engine_rpm']:.0f} "
+                        f"gear={telemetry['truck_displayed_gear']:.0f} "
+                        f"trailer_attached={int(telemetry['trailer_attached'])} "
+                        f"trailer_mass={telemetry['trailer_mass_kg']:.0f}"
                     )
                     last_print = now
     finally:
         cv2.destroyAllWindows()
 
 
-def run_dataset_mode(telemetry_adapter: HttpTelemetryAdapter) -> None:
+def run_dataset_mode(
+    telemetry_adapter: HttpTelemetryAdapter,
+    controller_adapter: SwitchProControllerAdapter,
+) -> None:
     writer = DatasetWriter(DATASET_DIR, IMAGES_DIR, CSV_PATH)
     writer.setup()
     save_meta()
 
     print(f"Dataset dir: {DATASET_DIR.resolve()}")
     print("Pulsa ! para empezar/parar grabación.")
-    print("Pulsa ESC para salir.")
+    print("Pulsa : para salir.")
 
     recording = False
     toggle_pressed = False
@@ -311,9 +366,6 @@ def run_dataset_mode(telemetry_adapter: HttpTelemetryAdapter) -> None:
 
     frame_interval = 1.0 / CAPTURE_FPS
     next_frame_time = time.perf_counter()
-
-    last_size_check = 0.0
-    dataset_size_bytes = get_directory_size_bytes(DATASET_DIR)
 
     try:
         with mss() as sct:
@@ -344,7 +396,9 @@ def run_dataset_mode(telemetry_adapter: HttpTelemetryAdapter) -> None:
 
                 image = grab_frame(sct, CAPTURE_REGION)
                 processed_image = preprocess_frame(image)
+
                 telemetry = telemetry_adapter.read().to_dict()
+                controller = controller_adapter.read().to_dict()
 
                 now_time = time.time()
                 if recording and recording_started_at is not None:
@@ -352,14 +406,13 @@ def run_dataset_mode(telemetry_adapter: HttpTelemetryAdapter) -> None:
                 else:
                     recording_elapsed_seconds = accumulated_recording_seconds
 
-                if now_time - last_size_check >= 1.0:
-                    dataset_size_bytes = get_directory_size_bytes(DATASET_DIR)
-                    last_size_check = now_time
+                dataset_size_bytes = estimate_dataset_size_bytes(writer.get_num_samples())
 
                 frame_bgr = pil_to_bgr(processed_image)
                 frame_bgr = draw_overlay(
                     frame_bgr=frame_bgr,
                     telemetry=telemetry,
+                    controller=controller,
                     recording=recording,
                     is_test=False,
                     recording_elapsed_seconds=recording_elapsed_seconds,
@@ -377,6 +430,7 @@ def run_dataset_mode(telemetry_adapter: HttpTelemetryAdapter) -> None:
                     pil_image=processed_image,
                     timestamp=timestamp,
                     telemetry=telemetry,
+                    controller=controller,
                 )
     finally:
         writer.close()
@@ -384,11 +438,11 @@ def run_dataset_mode(telemetry_adapter: HttpTelemetryAdapter) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Captura de dataset ETS2 con user input")
+    parser = argparse.ArgumentParser(description="Captura de dataset ETS2 con target desde mando")
     parser.add_argument(
         "--test",
         action="store_true",
-        help="Solo visualiza captura y telemetría, sin guardar dataset",
+        help="Solo visualiza captura, mando y telemetría, sin guardar dataset",
     )
     return parser.parse_args()
 
@@ -397,17 +451,20 @@ def main() -> None:
     args = parse_args()
 
     telemetry_adapter = HttpTelemetryAdapter()
+    controller_adapter = SwitchProControllerAdapter()
+
     telemetry_adapter.connect()
+    controller_adapter.connect()
 
     try:
         if args.test:
-            run_test_mode(telemetry_adapter)
+            run_test_mode(telemetry_adapter, controller_adapter)
         else:
-            run_dataset_mode(telemetry_adapter)
+            run_dataset_mode(telemetry_adapter, controller_adapter)
     finally:
+        controller_adapter.close()
         telemetry_adapter.close()
 
 
 if __name__ == "__main__":
     main()
-    

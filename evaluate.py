@@ -10,54 +10,14 @@ import torch
 import torch.nn as nn
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from torch.utils.data import DataLoader, Subset
-from torchvision import models, transforms
+from torchvision import transforms
 
 from driving_dataset import DrivingDataset
+from model import DrivingModel
 
 
 TARGET_NAMES = ["steering", "throttle", "brake"]
 DATASET_PATH = "dataset"
-
-
-class DrivingModel(nn.Module):
-    def __init__(self, pretrained: bool = True) -> None:
-        super().__init__()
-
-        print(f"[Model] Building evaluation model | pretrained={pretrained}")
-        weights = models.MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
-        backbone = models.mobilenet_v3_small(weights=weights)
-
-        self.image_backbone = backbone.features
-        self.image_pool = nn.AdaptiveAvgPool2d(1)
-
-        image_feature_dim = 576
-        numeric_feature_dim = 4
-
-        self.numeric_mlp = nn.Sequential(
-            nn.Linear(numeric_feature_dim, 32),
-            nn.ReLU(),
-            nn.Linear(32, 32),
-            nn.ReLU(),
-        )
-
-        self.head = nn.Sequential(
-            nn.Linear(image_feature_dim + 32, 128),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 3),
-        )
-
-    def forward(self, image: torch.Tensor, numeric: torch.Tensor) -> torch.Tensor:
-        x_img = self.image_backbone(image)
-        x_img = self.image_pool(x_img)
-        x_img = torch.flatten(x_img, 1)
-
-        x_num = self.numeric_mlp(numeric)
-
-        x = torch.cat([x_img, x_num], dim=1)
-        return self.head(x)
 
 
 def parse_args() -> argparse.Namespace:

@@ -7,6 +7,13 @@ import pandas as pd
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
+import torchvision.transforms.functional as F
+
+
+MAX_SPEED = 130.0
+MAX_RPM = 3000.0
+MAX_GEAR = 12.0
+MAX_TRAILER_MASS = 50000.0
 
 
 class DrivingDataset(Dataset):
@@ -37,52 +44,38 @@ class DrivingDataset(Dataset):
             "brake",
             "truck_speed_kmh",
             "speed_limit_kmh",
-            "cargo_mass_kg",
-            "truck_power_hp",
+            "truck_game_steer",
+            "truck_acceleration_x",
+            "truck_acceleration_y",
+            "truck_acceleration_z",
+            "truck_engine_rpm",
+            "truck_displayed_gear",
+            "trailer_attached",
+            "trailer_mass_kg",
         }
+
         missing = required - set(df.columns)
         if missing:
             raise ValueError(f"Faltan columnas requeridas en CSV: {sorted(missing)}")
 
         print("[DrivingDataset] Dropping rows with missing values...")
-        df = df.dropna(
-            subset=[
-                "image_path",
-                "steering",
-                "throttle",
-                "brake",
-                "truck_speed_kmh",
-                "speed_limit_kmh",
-                "cargo_mass_kg",
-                "truck_power_hp",
-            ]
-        ).reset_index(drop=True)
+        df = df.dropna(subset=list(required)).reset_index(drop=True)
 
         if verify_images:
             print("[DrivingDataset] Verifying that image files exist...")
             valid_rows = []
-            missing_count = 0
-
             for _, row in df.iterrows():
-                image_rel = str(row["image_path"])
-                image_path = self.images_root.parent / image_rel
-
+                image_path = self.images_root.parent / str(row["image_path"])
                 if image_path.exists():
                     valid_rows.append(row)
-                else:
-                    missing_count += 1
 
             df = pd.DataFrame(valid_rows).reset_index(drop=True)
 
-            print(f"[DrivingDataset] Valid images: {len(df)}")
-            print(f"[DrivingDataset] Missing images ignored: {missing_count}")
+        if len(df) == 0:
+            raise ValueError("Dataset vacío.")
 
+        print(f"[DrivingDataset] Final dataset size: {len(df)} samples")
         self.df = df
-
-        if len(self.df) == 0:
-            raise ValueError("Dataset vacío después de filtrar imágenes.")
-
-        print(f"[DrivingDataset] Final dataset size: {len(self.df)} samples")
 
     def __len__(self) -> int:
         return len(self.df)
@@ -90,9 +83,7 @@ class DrivingDataset(Dataset):
     def __getitem__(self, idx: int):
         row = self.df.iloc[idx]
 
-        image_rel = str(row["image_path"])
-        image_path = self.images_root.parent / image_rel
-
+        image_path = self.images_root.parent / str(row["image_path"])
         image = Image.open(image_path).convert("RGB")
 
         if self.transform is not None:
@@ -100,10 +91,16 @@ class DrivingDataset(Dataset):
 
         features = torch.tensor(
             [
-                float(row["truck_speed_kmh"]) / 130.0,
-                float(row["speed_limit_kmh"]) / 130.0,
-                float(row["cargo_mass_kg"]) / 50000.0,
-                float(row["truck_power_hp"]) / 1000.0,
+                float(row["truck_speed_kmh"]) / MAX_SPEED,
+                float(row["speed_limit_kmh"]) / MAX_SPEED,
+                float(row["truck_game_steer"]),
+                float(row["truck_acceleration_x"]),
+                float(row["truck_acceleration_y"]),
+                float(row["truck_acceleration_z"]),
+                float(row["truck_engine_rpm"]) / MAX_RPM,
+                float(row["truck_displayed_gear"]) / MAX_GEAR,
+                float(row["trailer_attached"]),
+                float(row["trailer_mass_kg"]) / MAX_TRAILER_MASS,
             ],
             dtype=torch.float32,
         )
@@ -118,3 +115,26 @@ class DrivingDataset(Dataset):
         )
 
         return image, features, target
+    
+class HideHUD:
+    def __init__(self, img_size: int):
+        self.img_size = img_size
+
+    def __call__(self, img):
+        # Convert to tensor if not already
+        if not isinstance(img, torch.Tensor):
+            img = F.to_tensor(img)
+
+        _, H, W = img.shape
+
+        # --- Bottom-left (speedometer) ---
+        h1 = int(H * 0.25)
+        w1 = int(W * 0.25)
+        img[:, H - h1:H, 0:w1] = 0.0
+
+        # --- Bottom-right (minimap) ---
+        h2 = int(H * 0.30)
+        w2 = int(W * 0.30)
+        img[:, H - h2:H, W - w2:W] = 0.0
+
+        return img

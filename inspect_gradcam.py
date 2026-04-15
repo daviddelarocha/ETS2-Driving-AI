@@ -13,54 +13,16 @@ from PIL import Image
 
 import torch
 import torch.nn as nn
-from torchvision import models, transforms
+from torchvision import transforms
 
+from model import DrivingModel
 
-MAX_SPEED_KMH = 130.0
-MAX_CARGO_MASS_KG = 50000.0
-MAX_POWER_HP = 1000.0
+MAX_SPEED = 130.0
+MAX_RPM = 3000.0
+MAX_GEAR = 12.0
+MAX_TRAILER_MASS = 50000.0
 
 TARGET_NAMES = ["steering", "throttle", "brake"]
-
-
-class DrivingModel(nn.Module):
-    def __init__(self, pretrained: bool = True) -> None:
-        super().__init__()
-
-        weights = models.MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
-        backbone = models.mobilenet_v3_small(weights=weights)
-
-        self.image_backbone = backbone.features
-        self.image_pool = nn.AdaptiveAvgPool2d(1)
-
-        image_feature_dim = 576
-        numeric_feature_dim = 4
-
-        self.numeric_mlp = nn.Sequential(
-            nn.Linear(numeric_feature_dim, 32),
-            nn.ReLU(),
-            nn.Linear(32, 32),
-            nn.ReLU(),
-        )
-
-        self.head = nn.Sequential(
-            nn.Linear(image_feature_dim + 32, 128),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 3),
-        )
-
-    def forward(self, image: torch.Tensor, numeric: torch.Tensor) -> torch.Tensor:
-        x_img = self.image_backbone(image)
-        x_img = self.image_pool(x_img)
-        x_img = torch.flatten(x_img, 1)
-
-        x_num = self.numeric_mlp(numeric)
-
-        x = torch.cat([x_img, x_num], dim=1)
-        return self.head(x)
 
 
 class GradCAM:
@@ -147,19 +109,30 @@ def parse_args() -> argparse.Namespace:
     )
     return parser.parse_args()
 
-
 def build_numeric_tensor(
     truck_speed_kmh: float,
     speed_limit_kmh: float,
-    cargo_mass_kg: float,
-    truck_power_hp: float,
+    truck_game_steer: float,
+    acc_x: float,
+    acc_y: float,
+    acc_z: float,
+    rpm: float,
+    gear: float,
+    trailer_attached: float,
+    trailer_mass: float,
 ) -> torch.Tensor:
     features = torch.tensor(
         [
-            truck_speed_kmh / MAX_SPEED_KMH,
-            speed_limit_kmh / MAX_SPEED_KMH,
-            cargo_mass_kg / MAX_CARGO_MASS_KG,
-            truck_power_hp / MAX_POWER_HP,
+            truck_speed_kmh / MAX_SPEED,
+            speed_limit_kmh / MAX_SPEED,
+            truck_game_steer,
+            acc_x,
+            acc_y,
+            acc_z,
+            rpm / MAX_RPM,
+            gear / MAX_GEAR,
+            trailer_attached,
+            trailer_mass / MAX_TRAILER_MASS,
         ],
         dtype=torch.float32,
     )
@@ -257,8 +230,14 @@ def add_text_block(
         "INPUTS / FEATURES",
         f"speed={telemetry['truck_speed_kmh']:.1f} km/h",
         f"limit={telemetry['speed_limit_kmh']:.1f} km/h",
-        f"cargo={telemetry['cargo_mass_kg']:.0f} kg",
-        f"power={telemetry['truck_power_hp']:.0f} hp",
+        f"gameSteer={telemetry['truck_game_steer']:+.3f}",
+        f"acc_x={telemetry['truck_acceleration_x']:+.3f}",
+        f"acc_y={telemetry['truck_acceleration_y']:+.3f}",
+        f"acc_z={telemetry['truck_acceleration_z']:+.3f}",
+        f"rpm={telemetry['truck_engine_rpm']:.0f}",
+        f"gear={telemetry['truck_displayed_gear']:.0f}",
+        f"trailer_attached={int(telemetry['trailer_attached'])}",
+        f"trailer_mass={telemetry['trailer_mass_kg']:.0f} kg",
         "",
         "REAL TARGETS",
         f"real steering={format_value(dataset_targets.get('steering'))}",
@@ -337,8 +316,14 @@ def process_single_sample(
     numeric_tensor = build_numeric_tensor(
         truck_speed_kmh=telemetry["truck_speed_kmh"],
         speed_limit_kmh=telemetry["speed_limit_kmh"],
-        cargo_mass_kg=telemetry["cargo_mass_kg"],
-        truck_power_hp=telemetry["truck_power_hp"],
+        truck_game_steer=telemetry["truck_game_steer"],
+        acc_x=telemetry["truck_acceleration_x"],
+        acc_y=telemetry["truck_acceleration_y"],
+        acc_z=telemetry["truck_acceleration_z"],
+        rpm=telemetry["truck_engine_rpm"],
+        gear=telemetry["truck_displayed_gear"],
+        trailer_attached=telemetry["trailer_attached"],
+        trailer_mass=telemetry["trailer_mass_kg"],
     )
 
     target_index = TARGET_NAMES.index(target_name)
@@ -397,8 +382,14 @@ def load_dataset_rows(csv_path: Path, dataset_folder: Path) -> pd.DataFrame:
         "brake",
         "truck_speed_kmh",
         "speed_limit_kmh",
-        "cargo_mass_kg",
-        "truck_power_hp",
+        "truck_game_steer",
+        "truck_acceleration_x",
+        "truck_acceleration_y",
+        "truck_acceleration_z",
+        "truck_engine_rpm",
+        "truck_displayed_gear",
+        "trailer_attached",
+        "trailer_mass_kg",
     }
     missing = required_columns - set(df.columns)
     if missing:
@@ -462,8 +453,14 @@ def main() -> None:
             telemetry = {
                 "truck_speed_kmh": float(row["truck_speed_kmh"]),
                 "speed_limit_kmh": float(row["speed_limit_kmh"]),
-                "cargo_mass_kg": float(row["cargo_mass_kg"]),
-                "truck_power_hp": float(row["truck_power_hp"]),
+                "truck_game_steer": float(row["truck_game_steer"]),
+                "truck_acceleration_x": float(row["truck_acceleration_x"]),
+                "truck_acceleration_y": float(row["truck_acceleration_y"]),
+                "truck_acceleration_z": float(row["truck_acceleration_z"]),
+                "truck_engine_rpm": float(row["truck_engine_rpm"]),
+                "truck_displayed_gear": float(row["truck_displayed_gear"]),
+                "trailer_attached": float(row["trailer_attached"]),
+                "trailer_mass_kg": float(row["trailer_mass_kg"]),
             }
 
             dataset_targets = {

@@ -11,9 +11,10 @@ import torch
 import torch.nn as nn
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Subset
-from torchvision import models, transforms
+from torchvision import transforms
 
-from driving_dataset import DrivingDataset
+from driving_dataset import DrivingDataset, HideHUD
+from model import DrivingModel
 
 
 TARGET_NAMES = ["steering", "throttle", "brake"]
@@ -25,48 +26,6 @@ def set_seed(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-
-
-class DrivingModel(nn.Module):
-    def __init__(self, pretrained: bool = True) -> None:
-        super().__init__()
-
-        print(f"[Model] Building MobileNetV3 Small backbone | pretrained={pretrained}")
-        weights = models.MobileNet_V3_Small_Weights.DEFAULT if pretrained else None
-        backbone = models.mobilenet_v3_small(weights=weights)
-
-        self.image_backbone = backbone.features
-        self.image_pool = nn.AdaptiveAvgPool2d(1)
-
-        image_feature_dim = 576
-        numeric_feature_dim = 4
-
-        self.numeric_mlp = nn.Sequential(
-            nn.Linear(numeric_feature_dim, 32),
-            nn.ReLU(),
-            nn.Linear(32, 32),
-            nn.ReLU(),
-        )
-
-        self.head = nn.Sequential(
-            nn.Linear(image_feature_dim + 32, 128),
-            nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 3),
-        )
-
-    def forward(self, image: torch.Tensor, numeric: torch.Tensor) -> torch.Tensor:
-        x_img = self.image_backbone(image)
-        x_img = self.image_pool(x_img)
-        x_img = torch.flatten(x_img, 1)
-
-        x_num = self.numeric_mlp(numeric)
-
-        x = torch.cat([x_img, x_num], dim=1)
-        return self.head(x)
-
 
 def evaluate_loss(model: nn.Module, loader: DataLoader, criterion: nn.Module, device: torch.device) -> float:
     model.eval()
@@ -177,7 +136,7 @@ def main() -> None:
     print("[Setup] Building image transforms...")
     transform = transforms.Compose([
         transforms.Resize((args.img_size, args.img_size)),
-        transforms.ToTensor(),
+        HideHUD(args.img_size),
         transforms.Normalize(
             mean=[0.485, 0.456, 0.406],
             std=[0.229, 0.224, 0.225],

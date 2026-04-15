@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass
 from typing import Dict
 
@@ -10,21 +9,31 @@ import requests
 @dataclass
 class TelemetryState:
     truck_speed_kmh: float
-    truck_accel_kmh_s: float
     speed_limit_kmh: float
+    truck_game_steer: float
 
-    user_steer: float
-    user_throttle: float
-    user_brake: float
+    truck_acceleration_x: float
+    truck_acceleration_y: float
+    truck_acceleration_z: float
+
+    truck_engine_rpm: float
+    truck_displayed_gear: float
+
+    trailer_attached: float
+    trailer_mass_kg: float
 
     def to_dict(self) -> Dict[str, float]:
         return {
             "truck_speed_kmh": self.truck_speed_kmh,
-            "truck_accel_kmh_s": self.truck_accel_kmh_s,
             "speed_limit_kmh": self.speed_limit_kmh,
-            "user_steer": self.user_steer,
-            "user_throttle": self.user_throttle,
-            "user_brake": self.user_brake,
+            "truck_game_steer": self.truck_game_steer,
+            "truck_acceleration_x": self.truck_acceleration_x,
+            "truck_acceleration_y": self.truck_acceleration_y,
+            "truck_acceleration_z": self.truck_acceleration_z,
+            "truck_engine_rpm": self.truck_engine_rpm,
+            "truck_displayed_gear": self.truck_displayed_gear,
+            "trailer_attached": self.trailer_attached,
+            "trailer_mass_kg": self.trailer_mass_kg,
         }
 
 
@@ -32,8 +41,6 @@ class HttpTelemetryAdapter:
     def __init__(self, url: str = "http://127.0.0.1:25555/api/ets2/telemetry") -> None:
         self.url = url
         self.session = requests.Session()
-        self._last_speed_kmh: float | None = None
-        self._last_time: float | None = None
 
     def connect(self) -> None:
         r = self.session.get(self.url, timeout=2)
@@ -49,25 +56,23 @@ class HttpTelemetryAdapter:
 
         truck = data.get("truck", {})
         navigation = data.get("navigation", {})
+        trailer = data.get("trailer", {})
 
-        now = time.perf_counter()
-        speed_kmh = float(truck.get("speed", 0.0))
+        acceleration = truck.get("acceleration", {})
 
-        accel_kmh_s = 0.0
-        if self._last_speed_kmh is not None and self._last_time is not None:
-            dt = now - self._last_time
-            if dt > 1e-6:
-                accel_kmh_s = (speed_kmh - self._last_speed_kmh) / dt
-
-        self._last_speed_kmh = speed_kmh
-        self._last_time = now
+        attached_raw = trailer.get("attached", False)
+        attached = 1.0 if bool(attached_raw) else 0.0
 
         return TelemetryState(
-            truck_speed_kmh=speed_kmh,
-            truck_accel_kmh_s=accel_kmh_s,
+            truck_speed_kmh=float(truck.get("speed", 0.0)),
             speed_limit_kmh=float(navigation.get("speedLimit", 0.0)),
-            user_steer=float(truck.get("userSteer", 0.0)),
-            user_throttle=float(truck.get("userThrottle", 0.0)),
-            user_brake=float(truck.get("userBrake", 0.0)),
+            truck_game_steer=float(truck.get("gameSteer", 0.0)),
+            truck_acceleration_x=float(acceleration.get("x", 0.0)),
+            truck_acceleration_y=float(acceleration.get("y", 0.0)),
+            truck_acceleration_z=float(acceleration.get("z", 0.0)),
+            truck_engine_rpm=float(truck.get("engineRpm", 0.0)),
+            truck_displayed_gear=float(truck.get("displayedGear", 0.0)),
+            trailer_attached=attached,
+            trailer_mass_kg=float(trailer.get("mass", 0.0)),
         )
     
