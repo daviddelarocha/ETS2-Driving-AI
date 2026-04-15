@@ -197,7 +197,7 @@ def main() -> None:
     model = DrivingModel(pretrained=not args.no_pretrained).to(device)
 
     print("[Setup] Creating loss and optimizer...")
-    criterion = WeightedSmoothL1Loss(weights=[3.0, 1.0, 1.0])
+    criterion = WeightedSmoothL1Loss(weights=[3.0, 1.0, 1.0]).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     history = []

@@ -43,6 +43,7 @@ class DrivingModel(nn.Module):
         x = torch.cat([x_img, x_num], dim=1)
         return self.head(x)
     
+    
 class WeightedSmoothL1Loss(nn.Module):
     def __init__(self, weights: list[float]) -> None:
         super().__init__()
@@ -52,12 +53,10 @@ class WeightedSmoothL1Loss(nn.Module):
         )
 
     def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        # pred, target: [B, 3] -> [steering, throttle, brake]
         per_output_loss = torch.nn.functional.smooth_l1_loss(
             pred,
             target,
             reduction="none",
-        )  # [B, 3]
-
+        )
         weighted = per_output_loss * self.weights
         return weighted.mean()
