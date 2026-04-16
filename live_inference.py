@@ -22,7 +22,7 @@ from controller_adapter import SwitchController, VirtualXboxController
 # Config
 # =========================
 
-MODEL_PATH = Path("artifacts/best_model.pt")
+MODEL_PATH = Path("artifacts_gc/best_model.pt")
 
 CAPTURE_MONITOR = 2
 CAPTURE_REGION = None
@@ -95,14 +95,14 @@ def build_numeric_features(raw: Dict[str, float]) -> torch.Tensor:
         [
             float(raw["truck_speed_kmh"]) / MAX_SPEED,
             float(raw["speed_limit_kmh"]) / MAX_SPEED,
-            float(raw["truck_game_steer"]),
+            # float(raw["truck_game_steer"]),
             float(raw["truck_acceleration_x"]),
             float(raw["truck_acceleration_y"]),
             float(raw["truck_acceleration_z"]),
-            float(raw["truck_engine_rpm"]) / MAX_RPM,
-            float(raw["truck_displayed_gear"]) / MAX_GEAR,
-            float(raw["trailer_attached"]),
-            float(raw["trailer_mass_kg"]) / MAX_TRAILER_MASS,
+            # float(raw["truck_engine_rpm"]) / MAX_RPM,
+            # float(raw["truck_displayed_gear"]) / MAX_GEAR,
+            # float(raw["trailer_attached"]),
+            # float(raw["trailer_mass_kg"]) / MAX_TRAILER_MASS,
         ],
         dtype=torch.float32,
     )
@@ -122,13 +122,32 @@ def clamp_prediction(values: np.ndarray) -> Dict[str, float]:
 
 def apply_ema(pred: Dict[str, float], ema_state: Dict[str, float]) -> Dict[str, float]:
     ema_state["steering"] = EMA_ALPHA * pred["steering"] + (1.0 - EMA_ALPHA) * ema_state["steering"]
-    ema_state["throttle"] = EMA_ALPHA * pred["throttle"] + (1.0 - EMA_ALPHA) * ema_state["throttle"]
-    ema_state["brake"] = EMA_ALPHA * pred["brake"] + (1.0 - EMA_ALPHA) * ema_state["brake"]
+    # ema_state["throttle"] = EMA_ALPHA * pred["throttle"] + (1.0 - EMA_ALPHA) * ema_state["throttle"]
+    # ema_state["brake"] = EMA_ALPHA * pred["brake"] + (1.0 - EMA_ALPHA) * ema_state["brake"]
     return {
         "steering": ema_state["steering"],
-        "throttle": ema_state["throttle"],
-        "brake": ema_state["brake"],
+        # "throttle": ema_state["throttle"],
+        # "brake": ema_state["brake"],
+        "throttle": pred["throttle"],
+        "brake": pred["brake"],
     }
+
+
+def safe_control_correction(pred: Dict[str, float], telemetry: Dict[str, float]) -> Dict[str, float]:
+    corrected = pred.copy()
+
+    # If the speed is over the limit force the throttle to 0 to prevent speeding
+    if telemetry["truck_speed_kmh"] > telemetry["speed_limit_kmh"]:
+        corrected["throttle"] = 0.0
+        corrected["brake"] = max(corrected["brake"], 0.25)  # Apply some brake to help reduce speed
+
+    # If the truck is breaking hard, prevent the model from applying throttle to avoid conflicting controls
+    if telemetry["truck_acceleration_x"] < -5.0:
+        corrected["throttle"] = 0.0
+
+    # ToDo: Add more safety rules based on telemetry
+
+    return corrected
 
 
 def draw_text_lines(frame_bgr: np.ndarray, lines: list[str]) -> np.ndarray:
@@ -350,14 +369,15 @@ def main() -> None:
 
                 pred_raw = clamp_prediction(output)
                 pred_smooth = apply_ema(pred_raw, ema_state)
+                pred_corrected = safe_control_correction(pred_smooth, telemetry)
 
                 if autopilot_enabled:
                     virtual_pad.apply_controls(
-                        steering=pred_smooth["steering"],
-                        throttle=pred_smooth["throttle"],
-                        brake=pred_smooth["brake"],
+                        steering=pred_corrected["steering"],
+                        throttle=pred_corrected["throttle"],
+                        brake=pred_corrected["brake"],
                     )
-                    last_sent = pred_smooth.copy()
+                    last_sent = pred_corrected.copy()
                 else:
                     if manual_passthrough:
                         virtual_pad.apply_controls(

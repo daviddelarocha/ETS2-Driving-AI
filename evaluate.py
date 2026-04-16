@@ -20,11 +20,13 @@ DATASET_PATH = "dataset"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluación multimodal ETS2")
-    parser.add_argument("--csv", type=str, default=f"{DATASET_PATH}/samples.csv")
-    parser.add_argument("--images", type=str, default=f"{DATASET_PATH}/images")
-    parser.add_argument("--model", type=str, default="artifacts/best_model.pt")
-    parser.add_argument("--split", type=str, default="artifacts/data_split.json")
-    parser.add_argument("--output-dir", type=str, default="artifacts/eval")
+    # parser.add_argument("--csv", type=str, default=f"{DATASET_PATH}/samples.csv")
+    # parser.add_argument("--images", type=str, default=f"{DATASET_PATH}/images")
+    # parser.add_argument("--model", type=str, default="artifacts/best_model.pt")
+    # parser.add_argument("--split", type=str, default="artifacts/data_split.json")
+    # parser.add_argument("--output-dir", type=str, default="artifacts/eval")
+    parser.add_argument("--dataset", type=str, default=DATASET_PATH)
+    parser.add_argument("--artifacts", type=str, default="artifacts")
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=0)
     return parser.parse_args()
@@ -101,17 +103,20 @@ def main() -> None:
     args = parse_args()
     print(f"[Args] {vars(args)}")
 
-    output_dir = Path(args.output_dir)
+    dataset_path = Path(args.dataset)
+    artifacts_path = Path(args.artifacts)
+
+    output_dir = artifacts_path / "eval"
     print("[Setup] Creating evaluation output directory...")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print("[Artifacts] Loading model checkpoint...")
-    ckpt = torch.load(args.model, map_location="cpu")
+    ckpt = torch.load(artifacts_path / "best_model.pt", map_location="cpu")
     img_size = int(ckpt["img_size"])
     pretrained = bool(ckpt["pretrained"])
 
     print("[Artifacts] Loading data split...")
-    split_info = json.loads(Path(args.split).read_text(encoding="utf-8"))
+    split_info = json.loads((artifacts_path / "data_split.json").read_text(encoding="utf-8"))
     test_idx = split_info["test_indices"]
 
     print("[Setup] Building evaluation transforms...")
@@ -119,8 +124,8 @@ def main() -> None:
 
     print("[Data] Loading dataset...")
     dataset = DrivingDataset(
-        csv_path=args.csv,
-        images_root=args.images,
+        csv_path=dataset_path / "samples.csv",
+        images_root=dataset_path / "images",
         transform=transform,
         verify_images=True,
     )
