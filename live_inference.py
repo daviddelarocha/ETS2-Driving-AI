@@ -11,8 +11,8 @@ import numpy as np
 import torch
 from mss import mss
 from PIL import Image
-from torchvision import transforms
 
+from driving_dataset import get_transform
 from telemetry_adapter import HttpTelemetryAdapter
 from model import DrivingModel
 from controller_adapter import SwitchController, VirtualXboxController
@@ -268,14 +268,7 @@ def main() -> None:
     model.load_state_dict(ckpt["model_state_dict"])
     model.eval()
 
-    transform = transforms.Compose([
-        transforms.Resize((img_size, img_size)),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225],
-        ),
-    ])
+    transform = get_transform(img_size)
 
     print("[Setup] Connecting real controller...")
     controller = SwitchController()
@@ -392,7 +385,10 @@ def main() -> None:
                 cv2.imshow(MODEL_VIEW_WINDOW, status_view_bgr)
 
                 if debug_enabled:
-                    display_image = preprocess_for_display(image)
+                    tensor_img = image_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()
+                    tensor_img = (tensor_img * 255).clip(0, 255).astype(np.uint8)
+                    display_image = Image.fromarray(tensor_img)
+                    display_image = preprocess_for_display(display_image)
                     frame_bgr = pil_to_bgr(display_image)
                     frame_bgr = draw_overlay(
                         frame_bgr=frame_bgr,

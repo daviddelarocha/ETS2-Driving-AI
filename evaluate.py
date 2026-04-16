@@ -7,12 +7,10 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import torch.nn as nn
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from torch.utils.data import DataLoader, Subset
-from torchvision import transforms
 
-from driving_dataset import DrivingDataset
+from driving_dataset import DrivingDataset, get_transform
 from model import DrivingModel
 
 
@@ -117,14 +115,7 @@ def main() -> None:
     test_idx = split_info["test_indices"]
 
     print("[Setup] Building evaluation transforms...")
-    transform = transforms.Compose([
-        transforms.Resize((img_size, img_size)),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225],
-        ),
-    ])
+    transform = get_transform(img_size)
 
     print("[Data] Loading dataset...")
     dataset = DrivingDataset(

@@ -11,9 +11,8 @@ import torch
 import torch.nn as nn
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Subset
-from torchvision import transforms
 
-from driving_dataset import DrivingDataset, HideHUD
+from driving_dataset import DrivingDataset, get_transform
 from model import DrivingModel, WeightedSmoothL1Loss
 
 
@@ -134,14 +133,7 @@ def main() -> None:
     print(f"[Setup] Using device: {device}")
 
     print("[Setup] Building image transforms...")
-    transform = transforms.Compose([
-        transforms.Resize((args.img_size, args.img_size)),
-        HideHUD(args.img_size),
-        transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225],
-        ),
-    ])
+    transform = get_transform(args.img_size)
 
     print("[Data] Loading dataset...")
     full_dataset = DrivingDataset(

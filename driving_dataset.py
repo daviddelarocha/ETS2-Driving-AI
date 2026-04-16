@@ -4,9 +4,11 @@ from pathlib import Path
 from typing import Callable
 
 import pandas as pd
-import torch
 from PIL import Image
+
+import torch
 from torch.utils.data import Dataset
+from torchvision import transforms
 import torchvision.transforms.functional as F
 
 
@@ -120,6 +122,26 @@ class HideHUD:
     def __init__(self, img_size: int):
         self.img_size = img_size
 
+    def __call__(self, img: torch.Tensor):
+        _, H, W = img.shape
+
+        # Bottom-left speedometer
+        h = int(H * 0.25)
+        w = int(W * 0.25)
+        img[:, H-h:H, 0:w] = 0.0
+
+        # Bottom-center dashboard/HUD
+        h = int(H * 0.30)
+        w = int(W * 0.40)
+        img[:, H-h:H, (W-w)//2:(W+w)//2] = 0.0
+
+        # Bottom-right minimap
+        h = int(H * 0.30)
+        w = int(W * 0.30)
+        img[:, H-h:H, W-w:W] = 0.0
+
+        return img
+
     def __call__(self, img):
         # Convert to tensor if not already
         if not isinstance(img, torch.Tensor):
@@ -132,9 +154,26 @@ class HideHUD:
         w1 = int(W * 0.25)
         img[:, H - h1:H, 0:w1] = 0.0
 
+        # --- Bottom-center (HUD) ---
+        h2 = int(H * 0.30)
+        w2 = int(W * 0.40)
+        img[:, H - h2:H, (W - w2) // 2:(W + w2) // 2] = 0.0
+
         # --- Bottom-right (minimap) ---
         h2 = int(H * 0.30)
         w2 = int(W * 0.30)
         img[:, H - h2:H, W - w2:W] = 0.0
 
         return img
+    
+def get_transform(img_size: int):
+    return transforms.Compose([
+        transforms.Resize((360, 640)),
+        transforms.CenterCrop((150, 280)),
+        transforms.Resize((img_size, img_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406],
+            std=[0.229, 0.224, 0.225],
+        ),
+    ])

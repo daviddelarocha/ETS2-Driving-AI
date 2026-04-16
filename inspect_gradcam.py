@@ -16,6 +16,7 @@ import torch.nn as nn
 from torchvision import transforms
 
 from model import DrivingModel
+from driving_dataset import get_transform
 
 MAX_SPEED = 130.0
 MAX_RPM = 3000.0
@@ -79,7 +80,7 @@ class GradCAM:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Generate Grad-CAM overlays for all output features"
+        description="Generate or inspect Grad-CAM overlays for all output features"
     )
     parser.add_argument(
         "--dataset-folder",
@@ -96,8 +97,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--num-samples",
         type=int,
-        required=True,
-        help="Number of random samples to process",
+        default=10,
+        help="Number of random samples to process in save mode",
     )
     parser.add_argument("--overlay-alpha", type=float, default=0.45)
     parser.add_argument("--seed", type=int, default=42)
@@ -107,7 +108,13 @@ def parse_args() -> argparse.Namespace:
         default="samples.csv",
         help="CSV filename inside dataset-folder",
     )
+    parser.add_argument(
+        "--save",
+        action="store_true",
+        help="If passed, save outputs to disk. Otherwise open interactive viewer.",
+    )
     return parser.parse_args()
+
 
 def build_numeric_tensor(
     truck_speed_kmh: float,
@@ -159,14 +166,7 @@ def load_model_and_transform(model_path: Path) -> Tuple[DrivingModel, transforms
     model.load_state_dict(checkpoint["model_state_dict"])
     model.eval()
 
-    transform = transforms.Compose([
-        transforms.Resize((img_size, img_size)),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            mean=[0.485, 0.456, 0.406],
-            std=[0.229, 0.224, 0.225],
-        ),
-    ])
+    transform = get_transform(img_size)
 
     return model, transform, img_size
 
@@ -227,27 +227,29 @@ def add_text_block(
         f"sample={sample_name}",
         f"gradcam_target={target_name}",
         "",
-        "INPUTS / FEATURES",
-        f"speed={telemetry['truck_speed_kmh']:.1f} km/h",
-        f"limit={telemetry['speed_limit_kmh']:.1f} km/h",
-        f"gameSteer={telemetry['truck_game_steer']:+.3f}",
-        f"acc_x={telemetry['truck_acceleration_x']:+.3f}",
-        f"acc_y={telemetry['truck_acceleration_y']:+.3f}",
-        f"acc_z={telemetry['truck_acceleration_z']:+.3f}",
-        f"rpm={telemetry['truck_engine_rpm']:.0f}",
-        f"gear={telemetry['truck_displayed_gear']:.0f}",
-        f"trailer_attached={int(telemetry['trailer_attached'])}",
-        f"trailer_mass={telemetry['trailer_mass_kg']:.0f} kg",
-        "",
-        "REAL TARGETS",
-        f"real steering={format_value(dataset_targets.get('steering'))}",
-        f"real throttle={format_value(dataset_targets.get('throttle'))}",
-        f"real brake={format_value(dataset_targets.get('brake'))}",
-        "",
-        "MODEL OUTPUTS",
-        f"pred steering={pred['steering']:+.3f}",
-        f"pred throttle={pred['throttle']:.3f}",
-        f"pred brake={pred['brake']:.3f}",
+        f"real {target_name}={format_value(dataset_targets.get(target_name))}",
+        f"pred {target_name}={format_value(pred[target_name])}",
+        # "INPUTS / FEATURES",
+        # f"speed={telemetry['truck_speed_kmh']:.1f} km/h",
+        # f"limit={telemetry['speed_limit_kmh']:.1f} km/h",
+        # f"gameSteer={telemetry['truck_game_steer']:+.3f}",
+        # f"acc_x={telemetry['truck_acceleration_x']:+.3f}",
+        # f"acc_y={telemetry['truck_acceleration_y']:+.3f}",
+        # f"acc_z={telemetry['truck_acceleration_z']:+.3f}",
+        # f"rpm={telemetry['truck_engine_rpm']:.0f}",
+        # f"gear={telemetry['truck_displayed_gear']:.0f}",
+        # f"trailer_attached={int(telemetry['trailer_attached'])}",
+        # f"trailer_mass={telemetry['trailer_mass_kg']:.0f} kg",
+        # "",
+        # "REAL TARGETS",
+        # f"real steering={format_value(dataset_targets.get('steering'))}",
+        # f"real throttle={format_value(dataset_targets.get('throttle'))}",
+        # f"real brake={format_value(dataset_targets.get('brake'))}",
+        # "",
+        # "MODEL OUTPUTS",
+        # f"pred steering={pred['steering']:+.3f}",
+        # f"pred throttle={pred['throttle']:.3f}",
+        # f"pred brake={pred['brake']:.3f}",
     ]
 
     y = 26
@@ -309,10 +311,16 @@ def process_single_sample(
     output_dir: Path,
     overlay_alpha: float,
     sample_name: str,
-) -> Dict[str, float]:
-    pil_img, original_rgb = load_image(image_path)
+    save: bool = False,
+) -> Tuple[Dict[str, float], np.ndarray, Dict]:
+    pil_img, _ = load_image(image_path)
 
-    image_tensor = transform(pil_img).unsqueeze(0)
+    image_chw = transform(pil_img)
+    image_tensor = image_chw.unsqueeze(0)
+
+    transformed_rgb = image_chw.detach().cpu().permute(1, 2, 0).numpy()
+    transformed_rgb = (transformed_rgb * 255).clip(0, 255).astype(np.uint8)
+
     numeric_tensor = build_numeric_tensor(
         truck_speed_kmh=telemetry["truck_speed_kmh"],
         speed_limit_kmh=telemetry["speed_limit_kmh"],
@@ -335,9 +343,18 @@ def process_single_sample(
 
     pred = clamp_prediction(raw_pred)
 
-    cam_resized = resize_cam_to_image(cam, original_rgb.shape)
+    cam_resized = resize_cam_to_image(cam, transformed_rgb.shape)
     heatmap_rgb = make_heatmap(cam_resized)
-    overlay_rgb = overlay_heatmap(original_rgb, heatmap_rgb, overlay_alpha)
+    overlay_rgb = overlay_heatmap(transformed_rgb, heatmap_rgb, overlay_alpha)
+
+    overlay_rgb = cv2.resize(
+        overlay_rgb,
+        None,
+        fx=3,
+        fy=3,
+        interpolation=cv2.INTER_NEAREST,
+    )
+
     overlay_rgb = add_text_block(
         overlay_rgb,
         sample_name=sample_name,
@@ -356,15 +373,174 @@ def process_single_sample(
         "model_outputs": pred,
     }
 
-    save_outputs(
-        output_dir=output_dir,
-        sample_name=sample_name,
-        target_name=target_name,
-        overlay_rgb=overlay_rgb,
-        metadata=metadata,
+    if save:
+        save_outputs(
+            output_dir=output_dir,
+            sample_name=sample_name,
+            target_name=target_name,
+            overlay_rgb=overlay_rgb,
+            metadata=metadata,
+        )
+
+    return pred, overlay_rgb, metadata
+
+
+def make_montage(
+    overlays: Dict[str, np.ndarray],
+    sample_name: str,
+) -> np.ndarray:
+    ordered = [overlays[name] for name in TARGET_NAMES]
+
+    # Ensure same height
+    heights = [img.shape[0] for img in ordered]
+    widths = [img.shape[1] for img in ordered]
+    max_h = max(heights)
+
+    normalized = []
+    for img in ordered:
+        if img.shape[0] != max_h:
+            scale = max_h / img.shape[0]
+            new_w = int(img.shape[1] * scale)
+            img = cv2.resize(img, (new_w, max_h), interpolation=cv2.INTER_NEAREST)
+        normalized.append(img)
+
+    spacer = np.full((max_h, 20, 3), 30, dtype=np.uint8)
+    row = normalized[0]
+    for img in normalized[1:]:
+        row = np.concatenate([row, spacer, img], axis=1)
+
+    # Add top title band
+    title_h = 50
+    header = np.full((title_h, row.shape[1], 3), 20, dtype=np.uint8)
+
+    text = f"Sample: {sample_name} | Keys: [r] random  [s] save current  [q]/[ESC] quit"
+    cv2.putText(
+        header,
+        text,
+        (10, 32),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (255, 255, 255),
+        2,
+        cv2.LINE_AA,
     )
 
-    return pred
+    canvas = np.concatenate([header, row], axis=0)
+    return cv2.cvtColor(canvas, cv2.COLOR_RGB2BGR)
+
+
+def process_row_all_targets(
+    model: DrivingModel,
+    transform: transforms.Compose,
+    gradcam: GradCAM,
+    row: pd.Series,
+    output_dir: Path,
+    overlay_alpha: float,
+    save: bool = False,
+) -> Tuple[str, Dict[str, Dict[str, float]], Dict[str, np.ndarray], Dict[str, Dict]]:
+    image_path = Path(str(row["resolved_image_path"]))
+    sample_name = Path(str(row["image_path"])).stem
+
+    telemetry = {
+        "truck_speed_kmh": float(row["truck_speed_kmh"]),
+        "speed_limit_kmh": float(row["speed_limit_kmh"]),
+        "truck_game_steer": float(row["truck_game_steer"]),
+        "truck_acceleration_x": float(row["truck_acceleration_x"]),
+        "truck_acceleration_y": float(row["truck_acceleration_y"]),
+        "truck_acceleration_z": float(row["truck_acceleration_z"]),
+        "truck_engine_rpm": float(row["truck_engine_rpm"]),
+        "truck_displayed_gear": float(row["truck_displayed_gear"]),
+        "trailer_attached": float(row["trailer_attached"]),
+        "trailer_mass_kg": float(row["trailer_mass_kg"]),
+    }
+
+    dataset_targets = {
+        "steering": float(row["steering"]),
+        "throttle": float(row["throttle"]),
+        "brake": float(row["brake"]),
+    }
+
+    preds_per_target: Dict[str, Dict[str, float]] = {}
+    overlays: Dict[str, np.ndarray] = {}
+    metadata_per_target: Dict[str, Dict] = {}
+
+    for target_name in TARGET_NAMES:
+        pred, overlay_rgb, metadata = process_single_sample(
+            model=model,
+            transform=transform,
+            gradcam=gradcam,
+            image_path=image_path,
+            telemetry=telemetry,
+            dataset_targets=dataset_targets,
+            target_name=target_name,
+            output_dir=output_dir,
+            overlay_alpha=overlay_alpha,
+            sample_name=sample_name,
+            save=save,
+        )
+        preds_per_target[target_name] = pred
+        overlays[target_name] = overlay_rgb
+        metadata_per_target[target_name] = metadata
+
+    return sample_name, preds_per_target, overlays, metadata_per_target
+
+
+def run_interactive_viewer(
+    df: pd.DataFrame,
+    model: DrivingModel,
+    transform: transforms.Compose,
+    gradcam: GradCAM,
+    output_dir: Path,
+    overlay_alpha: float,
+) -> None:
+    window_name = "GradCAM Inspector"
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+
+    current_idx = None
+
+    while True:
+        current_idx = random.randrange(len(df))
+        row = df.iloc[current_idx]
+
+        sample_name, preds_per_target, overlays, metadata_per_target = process_row_all_targets(
+            model=model,
+            transform=transform,
+            gradcam=gradcam,
+            row=row,
+            output_dir=output_dir,
+            overlay_alpha=overlay_alpha,
+            save=False,
+        )
+
+        canvas_bgr = make_montage(overlays, sample_name)
+        cv2.imshow(window_name, canvas_bgr)
+
+        print(f"[VIEW] {sample_name}")
+        print(json.dumps(preds_per_target, indent=2))
+
+        while True:
+            key = cv2.waitKey(0) & 0xFF
+
+            if key in (ord("q"), 27):  # q or ESC
+                cv2.destroyAllWindows()
+                return
+
+            if key == ord("r"):
+                break
+
+            if key == ord("s"):
+                # save current sample
+                row = df.iloc[current_idx]
+                sample_name, preds_per_target, overlays, metadata_per_target = process_row_all_targets(
+                    model=model,
+                    transform=transform,
+                    gradcam=gradcam,
+                    row=row,
+                    output_dir=output_dir,
+                    overlay_alpha=overlay_alpha,
+                    save=True,
+                )
+                print(f"[SAVE] Guardado sample actual: {sample_name}")
 
 
 def load_dataset_rows(csv_path: Path, dataset_folder: Path) -> pd.DataFrame:
@@ -419,6 +595,7 @@ def load_dataset_rows(csv_path: Path, dataset_folder: Path) -> pd.DataFrame:
 def main() -> None:
     args = parse_args()
     random.seed(args.seed)
+    np.random.seed(args.seed)
 
     dataset_folder = Path(args.dataset_folder)
     artifacts_folder = Path(args.artifacts_folder)
@@ -434,21 +611,43 @@ def main() -> None:
     try:
         df = load_dataset_rows(csv_path, dataset_folder)
 
-        n = min(args.num_samples, len(df))
-        selected_indices = random.sample(range(len(df)), n)
-
         print(f"[INFO] Dataset samples disponibles: {len(df)}")
-        print(f"[INFO] Seleccionando {n} muestras aleatorias")
         print(f"[INFO] Checkpoint img_size: {img_size}")
-        print(f"[INFO] Targets a generar: {TARGET_NAMES}")
+        print(f"[INFO] Targets: {TARGET_NAMES}")
+
+        if not args.save:
+            print("[INFO] Interactive mode")
+            print("[INFO] Teclas: r=random, s=save current, q=quit")
+            run_interactive_viewer(
+                df=df,
+                model=model,
+                transform=transform,
+                gradcam=gradcam,
+                output_dir=output_dir,
+                overlay_alpha=args.overlay_alpha,
+            )
+            return
+
+        print("[INFO] Save mode")
+        n = min(args.num_samples, len(df))
+        selected_indices = np.random.choice(len(df), size=n, replace=False)
 
         summary = []
 
         for i, idx in enumerate(selected_indices, start=1):
             row = df.iloc[idx]
 
+            sample_name, preds_per_target, _, _ = process_row_all_targets(
+                model=model,
+                transform=transform,
+                gradcam=gradcam,
+                row=row,
+                output_dir=output_dir,
+                overlay_alpha=args.overlay_alpha,
+                save=True,
+            )
+
             image_path = Path(str(row["resolved_image_path"]))
-            sample_name = Path(str(row["image_path"])).stem
 
             telemetry = {
                 "truck_speed_kmh": float(row["truck_speed_kmh"]),
@@ -469,34 +668,18 @@ def main() -> None:
                 "brake": float(row["brake"]),
             }
 
-            per_target_preds = {}
-
-            for target_name in TARGET_NAMES:
-                pred = process_single_sample(
-                    model=model,
-                    transform=transform,
-                    gradcam=gradcam,
-                    image_path=image_path,
-                    telemetry=telemetry,
-                    dataset_targets=dataset_targets,
-                    target_name=target_name,
-                    output_dir=output_dir,
-                    overlay_alpha=args.overlay_alpha,
-                    sample_name=sample_name,
-                )
-                per_target_preds[target_name] = pred
-
             summary.append({
                 "sample_name": sample_name,
                 "image_path": str(image_path),
                 "inputs": telemetry,
                 "real_targets": dataset_targets,
                 "generated_targets": TARGET_NAMES,
-                "predictions_per_gradcam_target": per_target_preds,
+                "predictions_per_gradcam_target": preds_per_target,
             })
 
             print(f"[{i}/{n}] OK -> {sample_name}")
 
+        output_dir.mkdir(parents=True, exist_ok=True)
         (output_dir / "summary_all_targets.json").write_text(
             json.dumps(summary, indent=2),
             encoding="utf-8",
