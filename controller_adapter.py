@@ -26,6 +26,8 @@ class ControllerState:
     steering: float
     throttle: float
     brake: float
+    toggle_autopilot: float
+
     raw: Dict[str, Any]
 
     def to_dict(self) -> Dict[str, float]:
@@ -33,6 +35,8 @@ class ControllerState:
             "steering": self.steering,
             "throttle": self.throttle,
             "brake": self.brake,
+            "toggle_autopilot": self.toggle_autopilot,
+            **self.raw,
         }
 
 
@@ -133,6 +137,7 @@ class SwitchProControllerAdapter:
             throttle=throttle,
             brake=brake,
             raw=raw,
+            toggle_autopilot=float(self.joystick.get_button(BUTTON_TOGGLE_AUTOPILOT)),
         )
     
 # =========================

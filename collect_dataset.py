@@ -374,7 +374,7 @@ def run_dataset_mode(
                     print("Saliendo...")
                     break
 
-                if keyboard.is_pressed(START_STOP_KEY):
+                if keyboard.is_pressed(START_STOP_KEY) or controller_adapter.read().to_dict()["toggle_autopilot"] > 0.5:
                     if not toggle_pressed:
                         recording = not recording
                         if recording:

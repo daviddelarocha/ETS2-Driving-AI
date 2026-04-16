@@ -197,7 +197,7 @@ def draw_overlay(
             f"trailer | attached={int(telemetry['trailer_attached'])}  "
             f"mass={telemetry['trailer_mass_kg']:.0f} kg"
         ),
-        f"Toggle autopilot: controller R button (index {BUTTON_TOGGLE_AUTOPILOT})",
+        f"Toggle autopilot: controller R button",
         "ESC = exit",
     ]
     return draw_text_lines(frame_bgr, lines)
