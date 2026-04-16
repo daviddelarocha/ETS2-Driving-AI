@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+from statistics import mean
+from statistics import mean
 from typing import Callable
 
 import pandas as pd
@@ -18,6 +20,46 @@ MAX_GEAR = 12.0
 MAX_TRAILER_MASS = 50000.0
 
 
+def balance_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Balance the dataset for each scenario representation 
+    (right turn, left turn, straight, braking, idling) by undersampling the majority classes.
+    """
+    # count samples in each scenario
+    def get_conditions(df):
+        return {
+            # "right_turn": df["steering"] > 0.1,
+            # "left_turn": df["steering"] < -0.1,
+            # "straight": df["steering"].between(-0.1, 0.1) & (df["throttle"] > 0.1) & (df["brake"] < 0.1),
+            # "braking": df["brake"] > 0.1,
+            # "idling": (df["throttle"] < 0.1) & (df["brake"] < 0.1) & (df["truck_speed_kmh"] < 1.0),
+            "soft_right_turn": (df["steering"] > 0.1) & (df["steering"] < 0.9),
+            "full_right_turn": df["steering"] >= 0.9,
+            "soft_left_turn": (df["steering"] < -0.1) & (df["steering"] > -0.9),
+            "full_left_turn": df["steering"] <= -0.9,
+            "straight_idle": df["steering"] == 0,
+        }
+    init_conditions = get_conditions(df)
+    counts = {name: condition.sum() for name, condition in init_conditions.items()}
+    print(f"Scenario counts before balancing: {counts}")
+
+    # find the mean count
+    mean_count = mean(counts.values())
+
+    # undersample each scenario to the mean count
+    balanced_dfs = []
+    for name, condition in init_conditions.items():
+        scenario_df = df[condition]
+        if len(scenario_df) > mean_count:
+            scenario_df = scenario_df.sample(mean_count, random_state=42)
+        balanced_dfs.append(scenario_df)
+
+    balanced_df = pd.concat(balanced_dfs).reset_index(drop=True)
+    new_counts = {name: (balanced_df[condition]).shape[0] for name, condition in get_conditions(balanced_df).items()}
+    print(f"Scenario counts after balancing (verification): {new_counts}")
+
+    return balanced_df
+
 class DrivingDataset(Dataset):
     def __init__(
         self,
@@ -25,10 +67,12 @@ class DrivingDataset(Dataset):
         images_root: str | Path,
         transform: Callable | None = None,
         verify_images: bool = True,
+        balance: bool = False,
     ) -> None:
         self.csv_path = Path(csv_path)
         self.images_root = Path(images_root)
         self.transform = transform
+        self.balance = balance
 
         if not self.csv_path.exists():
             raise FileNotFoundError(f"No existe el CSV: {self.csv_path}")
@@ -46,14 +90,14 @@ class DrivingDataset(Dataset):
             "brake",
             "truck_speed_kmh",
             "speed_limit_kmh",
-            "truck_game_steer",
+            # "truck_game_steer",
             "truck_acceleration_x",
             "truck_acceleration_y",
             "truck_acceleration_z",
-            "truck_engine_rpm",
-            "truck_displayed_gear",
-            "trailer_attached",
-            "trailer_mass_kg",
+            # "truck_engine_rpm",
+            # "truck_displayed_gear",
+            # "trailer_attached",
+            # "trailer_mass_kg",
         }
 
         missing = required - set(df.columns)
@@ -72,6 +116,10 @@ class DrivingDataset(Dataset):
                     valid_rows.append(row)
 
             df = pd.DataFrame(valid_rows).reset_index(drop=True)
+
+        if self.balance:
+            print("[DrivingDataset] Balancing dataset...")
+            df = balance_dataset(df)
 
         if len(df) == 0:
             raise ValueError("Dataset vacío.")
@@ -95,14 +143,14 @@ class DrivingDataset(Dataset):
             [
                 float(row["truck_speed_kmh"]) / MAX_SPEED,
                 float(row["speed_limit_kmh"]) / MAX_SPEED,
-                float(row["truck_game_steer"]),
+                # float(row["truck_game_steer"]),
                 float(row["truck_acceleration_x"]),
                 float(row["truck_acceleration_y"]),
                 float(row["truck_acceleration_z"]),
-                float(row["truck_engine_rpm"]) / MAX_RPM,
-                float(row["truck_displayed_gear"]) / MAX_GEAR,
-                float(row["trailer_attached"]),
-                float(row["trailer_mass_kg"]) / MAX_TRAILER_MASS,
+                # float(row["truck_engine_rpm"]) / MAX_RPM,
+                # float(row["truck_displayed_gear"]) / MAX_GEAR,
+                # float(row["trailer_attached"]),
+                # float(row["trailer_mass_kg"]) / MAX_TRAILER_MASS,
             ],
             dtype=torch.float32,
         )

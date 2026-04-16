@@ -18,6 +18,7 @@ from model import DrivingModel, WeightedSmoothL1Loss
 
 TARGET_NAMES = ["steering", "throttle", "brake"]
 DATASET_PATH = "dataset"
+TRAIN_WEIGHTS = [1.0, 1.0, 1.0]
 
 
 def set_seed(seed: int) -> None:
@@ -141,13 +142,14 @@ def main() -> None:
         images_root=args.images,
         transform=transform,
         verify_images=True,
+        balance=True,
     )
 
     n = len(full_dataset)
     print(f"[Data] dataset loaded with {n} valid samples")
 
     if n < 100:
-        raise ValueError(f"dataset demasiado pequeño: {n} muestras")
+        raise ValueError(f"dataset too small: {n} samples after filtering. Check the CSV and image paths.")
 
     print("[Data] Splitting dataset into train / validation / test...")
     indices = np.arange(n)
@@ -189,7 +191,7 @@ def main() -> None:
     model = DrivingModel(pretrained=not args.no_pretrained).to(device)
 
     print("[Setup] Creating loss and optimizer...")
-    criterion = WeightedSmoothL1Loss(weights=[3.0, 1.0, 1.0]).to(device)
+    criterion = WeightedSmoothL1Loss(weights=TRAIN_WEIGHTS).to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     history = []

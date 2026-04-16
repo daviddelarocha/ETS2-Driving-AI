@@ -119,27 +119,27 @@ def parse_args() -> argparse.Namespace:
 def build_numeric_tensor(
     truck_speed_kmh: float,
     speed_limit_kmh: float,
-    truck_game_steer: float,
+    # truck_game_steer: float,
     acc_x: float,
     acc_y: float,
     acc_z: float,
-    rpm: float,
-    gear: float,
-    trailer_attached: float,
-    trailer_mass: float,
+    # rpm: float,
+    # gear: float,
+    # trailer_attached: float,
+    # trailer_mass: float,
 ) -> torch.Tensor:
     features = torch.tensor(
         [
             truck_speed_kmh / MAX_SPEED,
             speed_limit_kmh / MAX_SPEED,
-            truck_game_steer,
+            # truck_game_steer,
             acc_x,
             acc_y,
             acc_z,
-            rpm / MAX_RPM,
-            gear / MAX_GEAR,
-            trailer_attached,
-            trailer_mass / MAX_TRAILER_MASS,
+            # rpm / MAX_RPM,
+            # gear / MAX_GEAR,
+            # trailer_attached,
+            # trailer_mass / MAX_TRAILER_MASS,
         ],
         dtype=torch.float32,
     )
@@ -324,14 +324,14 @@ def process_single_sample(
     numeric_tensor = build_numeric_tensor(
         truck_speed_kmh=telemetry["truck_speed_kmh"],
         speed_limit_kmh=telemetry["speed_limit_kmh"],
-        truck_game_steer=telemetry["truck_game_steer"],
+        # truck_game_steer=telemetry["truck_game_steer"],
         acc_x=telemetry["truck_acceleration_x"],
         acc_y=telemetry["truck_acceleration_y"],
         acc_z=telemetry["truck_acceleration_z"],
-        rpm=telemetry["truck_engine_rpm"],
-        gear=telemetry["truck_displayed_gear"],
-        trailer_attached=telemetry["trailer_attached"],
-        trailer_mass=telemetry["trailer_mass_kg"],
+        # rpm=telemetry["truck_engine_rpm"],
+        # gear=telemetry["truck_displayed_gear"],
+        # trailer_attached=telemetry["trailer_attached"],
+        # trailer_mass=telemetry["trailer_mass_kg"],
     )
 
     target_index = TARGET_NAMES.index(target_name)
@@ -558,14 +558,14 @@ def load_dataset_rows(csv_path: Path, dataset_folder: Path) -> pd.DataFrame:
         "brake",
         "truck_speed_kmh",
         "speed_limit_kmh",
-        "truck_game_steer",
+        # "truck_game_steer",
         "truck_acceleration_x",
         "truck_acceleration_y",
         "truck_acceleration_z",
-        "truck_engine_rpm",
-        "truck_displayed_gear",
-        "trailer_attached",
-        "trailer_mass_kg",
+        # "truck_engine_rpm",
+        # "truck_displayed_gear",
+        # "trailer_attached",
+        # "trailer_mass_kg",
     }
     missing = required_columns - set(df.columns)
     if missing:

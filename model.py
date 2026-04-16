@@ -15,7 +15,7 @@ class DrivingModel(nn.Module):
         self.image_pool = nn.AdaptiveAvgPool2d(1)
 
         image_feature_dim = 576
-        numeric_feature_dim = 10
+        numeric_feature_dim = 5
 
         self.numeric_mlp = nn.Sequential(
             nn.Linear(numeric_feature_dim, 64),
